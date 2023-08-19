@@ -37,7 +37,6 @@ piperesolver.add_pipeline_class(windows_logsource_pipeline()) # Windows
 combined_pipeline = piperesolver.resolve(piperesolver.pipelines)
 # Instantiate backend using the combined pipeline
 sqlite_backend = sqlite.sqliteBackend(combined_pipeline)
-# Change to sqlite_backend.convert_rule(rule, "zircolite")[0] tu use "zircolite" format
 
 rule = SigmaCollection.from_yaml(
 r"""
@@ -54,6 +53,8 @@ r"""
 """)
 
 print(sqlite_backend.convert(rule)[0])
+# Change to sqlite_backend.convert_rule(rule, "zircolite")[0] to use "zircolite" format
+
 ```
 
 ## Running
