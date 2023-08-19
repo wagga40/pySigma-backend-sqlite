@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "pySigma-backend-sqlite"
+version = "0.1.0"
+description = "pySigma sqlite backend"
+authors = ["wagga <wagga>"]
+license = "LGPL-3.0-only"
+repository = "https://github.com/wagga40/pySigma-backend-sqlite"
+packages = [
+    { include = "sigma" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+pysigma = "^0.9.0"
+pysigma-pipeline-sysmon = "^1.0.2"
+pysigma-pipeline-windows = "^1.1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+coverage = "^7.3.0"
+
+
+[tool.pdm]
+[tool.pdm.dev-dependencies]
+dev = []
+
+[tool.pdm.build]
+includes = ["sigma"]
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[project]
+authors = [
+    {name = "wagga", email = "wagga"},
+]
+license = {text = "LGPL-3.0-only"}
+requires-python = ">=3.8,<4.0"
+dependencies = [
+    "pysigma>=0.10.2",
+]
+name = "pySigma-backend-sqlite"
+version = "0.1.0"
+description = "pySigma sqlite backend"
+
+[project.urls]
+repository = "https://github.com/wagga40/pySigma-backend-sqlite"
+
+[project.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+coverage = "^7.3.0"
