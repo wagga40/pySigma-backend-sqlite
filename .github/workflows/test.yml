@@ -37,7 +37,7 @@ jobs:
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 2ec45ded898fa11f2c42bcb9d2b163cf
-          filename: wagga40-pySigma-backend-sqlite.json
+          filename: test.json
           label: Coverage
           message: ${{ env.COVERAGE }}
           color: ${{ env.COVERAGE_COLOR }}
