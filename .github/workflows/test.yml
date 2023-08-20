@@ -36,7 +36,7 @@ jobs:
         uses: schneegans/dynamic-badges-action@v1.1.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
-          gistID: GitHub Gist identifier containing coverage badge JSON expected by shields.io.
+          gistID: 856b2bdb20b076355947f0ab4fdb1eb9
           filename: wagga40-pySigma-backend-sqlite.json
           label: Coverage
           message: ${{ env.COVERAGE }}
