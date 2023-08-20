@@ -13,12 +13,17 @@ For now, this backend aims to be compatible with [Zircolite](https://github.com/
 
 It supports the following output formats:
 
-* default: plain SQLite queries
-* zircolite : SQLite queries in JSON format for Zircolite
+* **default**: plain SQLite queries
+* **zircolite** : SQLite queries in JSON format for Zircolite
 
 This backend is currently maintained by:
 
 * [wagga](https://github.com/wagga40/)
+
+## Known issues 
+
+* CIDR modifier is not working as expected (tests have been modified accordingly). I'm currently working on it
+* Full text search support will need some work and is not a priority since it needs virtual tables on SQLite side
 
 # Quick Start 
 
@@ -65,5 +70,4 @@ print(sqlite_backend.convert(rule)[0])
 
 ```shell
 poetry poetry run python3 example.py
-
 ```

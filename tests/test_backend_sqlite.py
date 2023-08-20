@@ -126,7 +126,7 @@ def test_sqlite_cidr_query(sqlite_backend : sqliteBackend):
                     field|cidr: 192.168.0.0/16
                 condition: sel
         """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE field='192.168.\%'"]
+    ) == ["SELECT * FROM <TABLE_NAME> WHERE field LIKE '192.168.%'"]
 
 def test_sqlite_field_name_with_whitespace(sqlite_backend : sqliteBackend):
     assert sqlite_backend.convert(
