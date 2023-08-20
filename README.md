@@ -1,5 +1,5 @@
 ![Tests](https://github.com/wagga40/pySigma-backend-sqlite/actions/workflows/test.yml/badge.svg)
-![Coverage Badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/wagga40/856b2bdb20b076355947f0ab4fdb1eb9/raw/pySigma-backend-sqlite.json)
+![Coverage Badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/wagga40/856b2bdb20b076355947f0ab4fdb1eb9/raw/wagga40-pySigma-backend-sqlite.json)
 ![Status](https://img.shields.io/badge/Status-pre--release-orange)
 
 # pySigma SQLite Backend
