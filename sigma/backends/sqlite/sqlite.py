@@ -201,6 +201,13 @@ class sqliteBackend(TextQueryBackend):
                 "Field equals string value expressions with strings are not supported by the backend."
             )
 
+    def convert_condition_field_eq_val_cidr(self, cond : ConditionFieldEqualsValueExpression, state : ConversionState) -> Union[str, DeferredQueryExpression]:
+        """Conversion of field matches CIDR value expressions."""
+        cidr : SigmaCIDRExpression = cond.value
+        expanded = cidr.expand()
+        expanded_cond = ConditionOR([ ConditionFieldEqualsValueExpression(cond.field, SigmaString(network)) for network in expanded ], cond.source)
+        return self.convert_condition(expanded_cond, state)
+
     def finalize_query_default(self, rule: SigmaRule, query: str, index: int, state: ConversionState) -> Any:
 
         # TODO : fields support will be handled with a backend option (all fields by default)
