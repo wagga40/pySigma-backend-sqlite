@@ -7,7 +7,6 @@
 ### **PLEASE NOTE THAT THIS IS A WORK IN PROGRESS**
 
 This is the SQLite backend for pySigma. It provides the package `sigma.backends.sqlite` with the `sqliteBackend` class.
-Further, it contains the following processing pipelines in `sigma.pipelines.sqlite` **(which is empty for now)**
 
 For now, this backend aims to be compatible with [Zircolite](https://github.com/wagga40/Zircolite) which uses pure SQLite queries to perform SIGMA-based detection on EVTX, Auditd, Sysmon for linux, XML or JSONL/NDJSON Logs.
 
@@ -22,8 +21,8 @@ This backend is currently maintained by:
 
 ## Known issues 
 
-* CIDR modifier is not working as expected (tests have been modified accordingly). I'm currently working on it
 * Full text search support will need some work and is not a priority since it needs virtual tables on SQLite side
+* In a future update, changing table name will be handled by a backend option
 
 # Quick Start 
 
