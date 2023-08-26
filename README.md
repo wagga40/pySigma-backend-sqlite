@@ -19,14 +19,24 @@ This backend is currently maintained by:
 
 * [wagga](https://github.com/wagga40/)
 
-## Known issues 
+## Known issues/limitations
 
 * Full text search support will need some work and is not a priority since it needs virtual tables on SQLite side
 * In a future update, changing table name will be handled by a backend option
+* Aggregation is not supported since it is deprecated by the sigma specification and there are nearly no rule using it in the official repository
 
 # Quick Start 
 
 ## Example script (default output) with sysmon pipeline
+
+### Add pipelines 
+
+```shell
+poetry add pysigma-pipeline-sysmon
+poetry add pysigma-pipeline-windows
+```
+
+### Convert a rule
 
 ```python 
 from sigma.collection import SigmaCollection
@@ -39,7 +49,7 @@ from sigma.processing.resolver import ProcessingPipelineResolver
 # Create the pipeline resolver
 piperesolver = ProcessingPipelineResolver()
 # Add pipelines
-piperesolver.add_pipeline_class(sysmon_pipeline()) # Sysmon  
+piperesolver.add_pipeline_class(sysmon_pipeline()) # Syssmon  
 piperesolver.add_pipeline_class(windows_logsource_pipeline()) # Windows
 # Create a combined pipeline
 combined_pipeline = piperesolver.resolve(piperesolver.pipelines)
@@ -61,12 +71,11 @@ r"""
 """)
 
 print(sqlite_backend.convert(rule)[0])
-# Change to sqlite_backend.convert_rule(rule, "zircolite")[0] to use "zircolite" format
 
 ```
 
 ## Running
 
 ```shell
-poetry poetry run python3 example.py
+poetry run python3 example.py
 ```

@@ -1,10 +1,10 @@
 from sigma.conversion.deferred import DeferredQueryExpression
 from sigma.conversion.state import ConversionState
-from sigma.exceptions import SigmaFeatureNotSupportedByBackendError, SigmaValueError
+from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.rule import SigmaRule
 from sigma.conversion.base import TextQueryBackend
 from sigma.conditions import ConditionItem, ConditionAND, ConditionOR, ConditionNOT, ConditionValueExpression, ConditionFieldEqualsValueExpression
-from sigma.types import SigmaCompareExpression, SigmaString, SpecialChars, SigmaRegularExpressionFlag
+from sigma.types import SigmaCompareExpression, SigmaString, SpecialChars, SigmaRegularExpressionFlag, SigmaCIDRExpression
 
 import re
 import json
@@ -57,7 +57,7 @@ class sqliteBackend(TextQueryBackend):
     escape_char     : ClassVar[str] = "\\"    # Escaping character for special characters inside string
     wildcard_multi  : ClassVar[str] = "%"     # Character used as multi-character wildcard
     wildcard_single : ClassVar[str] = "_"     # Character used as single-character wildcard
-    add_escaped     : ClassVar[str] = "\""     # Characters quoted in addition to wildcards and string quote
+    add_escaped     : ClassVar[str] = "\\"     # Characters quoted in addition to wildcards and string quote
     #filter_chars    : ClassVar[str] = ""      # Characters filtered
     bool_values     : ClassVar[Dict[bool, str]] = {   # Values to which boolean values are mapped.
         True: "true",
@@ -65,13 +65,13 @@ class sqliteBackend(TextQueryBackend):
     }
 
     # String matching operators. if none is appropriate eq_token is used.
-    startswith_expression : ClassVar[str] = "{field} LIKE '{value}%'"
-    endswith_expression   : ClassVar[str] = "{field} LIKE '%{value}'"
-    contains_expression   : ClassVar[str] = "{field} LIKE '%{value}%'"
-    wildcard_match_expression : ClassVar[str] = "{field} LIKE '%{value}%'"      # Special expression if wildcards can't be matched with the eq_token operator
+    startswith_expression : ClassVar[str] = "{field} LIKE '{value}%' ESCAPE '\\'"
+    endswith_expression   : ClassVar[str] = "{field} LIKE '%{value}' ESCAPE '\\'"
+    contains_expression   : ClassVar[str] = "{field} LIKE '%{value}%' ESCAPE '\\'"
+    wildcard_match_expression : ClassVar[str] = "{field} LIKE '{value}' ESCAPE '\\'"      # Special expression if wildcards can't be matched with the eq_token operator
 
     # Special expression if wildcards can't be matched with the eq_token operator
-    wildcard_match_str_expression: ClassVar[str] = "{field} LIKE '%{value}%'"
+    wildcard_match_str_expression: ClassVar[str] = "{field} LIKE '{value}' ESCAPE '\\'"
     #wildcard_match_num_expression: ClassVar[str] = "{field} LIKE '%{value}%'"
 
     # Regular expressions
@@ -79,7 +79,7 @@ class sqliteBackend(TextQueryBackend):
     # is one of the flags shortcuts supported by Sigma (currently i, m and s) and refers to the
     # token stored in the class variable re_flags.
     re_expression : ClassVar[str] = "{field} REGEXP '{regex}'"
-    re_escape_char : ClassVar[str] = r""" \ """             # Character used for escaping in regular expressions
+    re_escape_char : ClassVar[str] = ""           # Character used for escaping in regular expressions
     re_escape : ClassVar[Tuple[str]] = ()               # List of strings that are escaped
     re_escape_escape_char : bool = True                 # If True, the escape character is also escaped
     re_flag_prefix : bool = True                        # If True, the flags are prepended as (?x) group at the beginning of the regular expression, e.g. (?i). If this is not supported by the target, it should be set to False.
@@ -139,9 +139,12 @@ class sqliteBackend(TextQueryBackend):
             self.escape_char,
             self.wildcard_multi,
             self.wildcard_single,
-            self.str_quote + self.add_escaped,
+            self.add_escaped,
             self.filter_chars,
         )
+
+        converted = converted.replace("\'", "\'\'") # Doubling single quote in SQL is mandatory 
+
         if self.decide_string_quoting(s) and not no_quote:
             return self.quote_string(converted)
         else:
@@ -177,7 +180,12 @@ class sqliteBackend(TextQueryBackend):
                 expr = self.contains_expression
                 value = cond.value[1:-1]
             elif (  # wildcard match expression: string contains wildcard
-                self.wildcard_match_expression is not None and cond.value.contains_special()
+                self.wildcard_match_expression is not None and (
+                cond.value.contains_special() 
+                or self.wildcard_multi in cond.value
+                or self.wildcard_single in cond.value
+                or self.escape_char in cond.value
+                )
             ):
                 expr = self.wildcard_match_expression
                 value = cond.value
@@ -243,8 +251,8 @@ class sqliteBackend(TextQueryBackend):
     # TODO : SQlite only handles FTS ("MATCH") with virtual tables. Not Handled for now.
     def convert_condition_val_str(self, cond : ConditionValueExpression, state : ConversionState) -> Union[str, DeferredQueryExpression]:
         """Conversion of value-only strings."""
-        raise NotImplementedError("Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend.")
+        raise SigmaFeatureNotSupportedByBackendError("Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend.")
         
     def convert_condition_val_num(self, cond : ConditionValueExpression, state : ConversionState) -> Union[str, DeferredQueryExpression]:
         """Conversion of value-only numbers."""
-        raise NotImplementedError("Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend.")
+        raise SigmaFeatureNotSupportedByBackendError("Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend.")
