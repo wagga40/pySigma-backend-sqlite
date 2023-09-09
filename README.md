@@ -6,7 +6,7 @@
 
 This is the SQLite backend for pySigma. It provides the package `sigma.backends.sqlite` with the `sqliteBackend` class.
 
-For now, this backend aims to be compatible with [Zircolite](https://github.com/wagga40/Zircolite) which uses pure SQLite queries to perform SIGMA-based detection on EVTX, Auditd, Sysmon for linux, XML or JSONL/NDJSON Logs.
+This backend also aims to be compatible with [Zircolite](https://github.com/wagga40/Zircolite) which uses **pure SQLite queries** to perform SIGMA-based detection on EVTX, Auditd, Sysmon for linux, XML or JSONL/NDJSON Logs.
 
 It supports the following output formats:
 
