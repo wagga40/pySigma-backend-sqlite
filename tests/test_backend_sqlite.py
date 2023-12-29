@@ -253,7 +253,7 @@ def test_sqlite_zircolite_output(sqlite_backend : sqliteBackend):
                     fieldA: value
                 condition: sel
         """))[0]
-    assert sqlite_backend.convert_rule(rule, "zircolite") == ['{"title": "Test", "id": "", "status": "test", "description": "", "author": "", "tags": [], "falsepositives": [], "level": "", "rule": ["SELECT * FROM logs WHERE fieldA=\'value\'"], "filename": ""}']
+    assert sqlite_backend.convert(rule, "zircolite") == '[{"title": "Test", "id": "", "status": "test", "description": "", "author": "", "tags": [], "falsepositives": [], "level": "", "rule": ["SELECT * FROM logs WHERE fieldA=\'value\'"], "filename": ""}]'
 
 # TODO: implement tests for all backend features that don't belong to the base class defaults, e.g. features that were
 # implemented with custom code, deferred expressions etc.
