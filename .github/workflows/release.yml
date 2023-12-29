@@ -22,6 +22,8 @@ jobs:
           python-version: 3.8
       - name: Verify versioning
         run: |
+          echo "$(poetry version -s)"
+          echo "${GITHUB_REF#refs/tags/v}"
           [ "$(poetry version -s)" == "${GITHUB_REF#refs/tags/v}" ]
       - name: Install dependencies
         run: poetry install
