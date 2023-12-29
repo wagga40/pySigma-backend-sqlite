@@ -2,7 +2,8 @@
 name = "pySigma-backend-sqlite"
 version = "0.1.0"
 description = "pySigma sqlite backend"
-authors = ["wagga <wagga>"]
+readme = "README.md"
+authors = ["wagga"]
 license = "LGPL-3.0-only"
 repository = "https://github.com/wagga40/pySigma-backend-sqlite"
 packages = [

@@ -245,8 +245,10 @@ class sqliteBackend(TextQueryBackend):
             "rule": [sqlite_query],
             "filename": ""
         }
-
-        return json.dumps(zircolite_rule)
+        return zircolite_rule
+    
+    def finalize_output_zircolite(self, queries: List[Dict]) -> Dict:
+        return list(queries)
     
     # TODO : SQlite only handles FTS ("MATCH") with virtual tables. Not Handled for now.
     def convert_condition_val_str(self, cond : ConditionValueExpression, state : ConversionState) -> Union[str, DeferredQueryExpression]:
