@@ -2,14 +2,18 @@ import pytest
 from sigma.collection import SigmaCollection
 from sigma.backends.sqlite import sqliteBackend
 
+
 @pytest.fixture
 def sqlite_backend():
     return sqliteBackend()
 
+
 # TODO: implement tests for some basic queries and their expected results.
-def test_sqlite_and_expression(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+def test_sqlite_and_expression(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -20,12 +24,18 @@ def test_sqlite_and_expression(sqlite_backend : sqliteBackend):
                     fieldA: valueA
                     fieldB: valueB
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' AND fieldB='valueB'"]
+        """
+            )
+        )
+        == ["SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' AND fieldB='valueB'"]
+    )
 
-def test_sqlite_or_expression(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_or_expression(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -37,12 +47,18 @@ def test_sqlite_or_expression(sqlite_backend : sqliteBackend):
                 sel2:
                     fieldB: valueB
                 condition: 1 of sel*
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' OR fieldB='valueB'"]
+        """
+            )
+        )
+        == ["SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' OR fieldB='valueB'"]
+    )
 
-def test_sqlite_and_or_expression(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_and_or_expression(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -57,12 +73,20 @@ def test_sqlite_and_or_expression(sqlite_backend : sqliteBackend):
                         - valueB1
                         - valueB2
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE (fieldA='valueA1' OR fieldA='valueA2') AND (fieldB='valueB1' OR fieldB='valueB2')"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE (fieldA='valueA1' OR fieldA='valueA2') AND (fieldB='valueB1' OR fieldB='valueB2')"
+        ]
+    )
 
-def test_sqlite_or_and_expression(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_or_and_expression(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -76,12 +100,20 @@ def test_sqlite_or_and_expression(sqlite_backend : sqliteBackend):
                     fieldA: valueA2
                     fieldB: valueB2
                 condition: 1 of sel*
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE (fieldA='valueA1' AND fieldB='valueB1') OR (fieldA='valueA2' AND fieldB='valueB2')"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE (fieldA='valueA1' AND fieldB='valueB1') OR (fieldA='valueA2' AND fieldB='valueB2')"
+        ]
+    )
 
-def test_sqlite_in_expression(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_in_expression(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -94,12 +126,20 @@ def test_sqlite_in_expression(sqlite_backend : sqliteBackend):
                         - valueB
                         - valueC*
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' OR fieldA='valueB' OR fieldA LIKE 'valueC%' ESCAPE '\\'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA='valueA' OR fieldA='valueB' OR fieldA LIKE 'valueC%' ESCAPE '\\'"
+        ]
+    )
 
-def test_sqlite_regex_query(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_regex_query(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -110,12 +150,20 @@ def test_sqlite_regex_query(sqlite_backend : sqliteBackend):
                     fieldA|re: foo.*bar
                     fieldB: foo
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA REGEXP 'foo.*bar' AND fieldB='foo'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA REGEXP 'foo.*bar' AND fieldB='foo'"
+        ]
+    )
 
-def test_sqlite_cidr_query(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_cidr_query(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -125,12 +173,18 @@ def test_sqlite_cidr_query(sqlite_backend : sqliteBackend):
                 sel:
                     field|cidr: 192.168.0.0/16
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE field LIKE '192.168.%' ESCAPE '\\'"]
+        """
+            )
+        )
+        == ["SELECT * FROM <TABLE_NAME> WHERE field LIKE '192.168.%' ESCAPE '\\'"]
+    )
 
-def test_sqlite_field_name_with_whitespace(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -140,12 +194,18 @@ def test_sqlite_field_name_with_whitespace(sqlite_backend : sqliteBackend):
                 sel:
                     field name: value
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE `field name`='value'"]
+        """
+            )
+        )
+        == ["SELECT * FROM <TABLE_NAME> WHERE `field name`='value'"]
+    )
 
-def test_sqlite_value_with_wildcards(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_value_with_wildcards(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -156,12 +216,20 @@ def test_sqlite_value_with_wildcards(sqlite_backend : sqliteBackend):
                     fieldA: wildcard%value
                     fieldB: wildcard_value
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE 'wildcard\\%value' ESCAPE '\\' AND fieldB LIKE 'wildcard\\_value' ESCAPE '\\'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE 'wildcard\\%value' ESCAPE '\\' AND fieldB LIKE 'wildcard\\_value' ESCAPE '\\'"
+        ]
+    )
 
-def test_sqlite_value_contains(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_value_contains(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -171,12 +239,20 @@ def test_sqlite_value_contains(sqlite_backend : sqliteBackend):
                 sel:
                     fieldA|contains: wildcard%value
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE '%wildcard\\%value%' ESCAPE '\\'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE '%wildcard\\%value%' ESCAPE '\\'"
+        ]
+    )
 
-def test_sqlite_value_startswith(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_value_startswith(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -186,12 +262,20 @@ def test_sqlite_value_startswith(sqlite_backend : sqliteBackend):
                 sel:
                     fieldA|startswith: wildcard%value
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE 'wildcard\\%value%' ESCAPE '\\'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE 'wildcard\\%value%' ESCAPE '\\'"
+        ]
+    )
 
-def test_sqlite_value_endswith(sqlite_backend : sqliteBackend):
-    assert sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+
+def test_sqlite_value_endswith(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -201,13 +285,20 @@ def test_sqlite_value_endswith(sqlite_backend : sqliteBackend):
                 sel:
                     fieldA|endswith: wildcard%value
                 condition: sel
-        """)
-    ) == ["SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE '%wildcard\\%value' ESCAPE '\\'"]
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA LIKE '%wildcard\\%value' ESCAPE '\\'"
+        ]
+    )
 
-def test_sqlite_fts_keywords_str(sqlite_backend : sqliteBackend):
+
+def test_sqlite_fts_keywords_str(sqlite_backend: sqliteBackend):
     with pytest.raises(Exception) as e:
         sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -218,15 +309,20 @@ def test_sqlite_fts_keywords_str(sqlite_backend : sqliteBackend):
                     - value1
                     - value2
                 condition: keywords
-        """)
+        """
+            )
+        )
+    assert (
+        str(e.value)
+        == "Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
     )
-    assert str(e.value) == "Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
 
 
-def test_sqlite_fts_keywords_num(sqlite_backend : sqliteBackend):
+def test_sqlite_fts_keywords_num(sqlite_backend: sqliteBackend):
     with pytest.raises(Exception) as e:
         sqlite_backend.convert(
-        SigmaCollection.from_yaml("""
+            SigmaCollection.from_yaml(
+                """
             title: Test
             status: test
             logsource:
@@ -237,12 +333,18 @@ def test_sqlite_fts_keywords_num(sqlite_backend : sqliteBackend):
                     - 1
                     - 2
                 condition: keywords
-        """)
+        """
+            )
+        )
+    assert (
+        str(e.value)
+        == "Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
     )
-    assert str(e.value) == "Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
 
-def test_sqlite_zircolite_output(sqlite_backend : sqliteBackend):
-    rule = list(SigmaCollection.from_yaml("""
+
+def test_sqlite_zircolite_output(sqlite_backend: sqliteBackend):
+    rule = SigmaCollection.from_yaml(
+        r"""
             title: Test
             status: test
             logsource:
@@ -252,8 +354,13 @@ def test_sqlite_zircolite_output(sqlite_backend : sqliteBackend):
                 sel:
                     fieldA: value
                 condition: sel
-        """))[0]
-    assert sqlite_backend.convert_rule(rule, "zircolite") == ['{"title": "Test", "id": "", "status": "test", "description": "", "author": "", "tags": [], "falsepositives": [], "level": "", "rule": ["SELECT * FROM logs WHERE fieldA=\'value\'"], "filename": ""}']
+        """
+    )
+    assert (
+        sqlite_backend.convert(rule, "zircolite")
+        == '[{"title": "Test", "id": "", "status": "test", "description": "", "author": "", "tags": [], "falsepositives": [], "level": "", "rule": ["SELECT * FROM logs WHERE fieldA=\'value\'"], "filename": ""}]'
+    )
+
 
 # TODO: implement tests for all backend features that don't belong to the base class defaults, e.g. features that were
 # implemented with custom code, deferred expressions etc.
