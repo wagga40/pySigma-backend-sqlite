@@ -11,14 +11,14 @@ jobs:
     strategy:
       matrix:
         os: [ 'ubuntu-20.04' ]
-        python-version: [ '3.8', '3.9', '3.10', '3.11' ]
+        python-version: [ '3.8', '3.9', '3.10', '3.11', '3.12' ]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Poetry
         run: pipx install poetry
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -30,7 +30,7 @@ jobs:
         run: poetry run python print-coverage.py >> $GITHUB_ENV
       - name: Create coverage badge
         if: ${{ github.repository == 'wagga40/pySigma-backend-sqlite' && github.event_name == 'push' && runner.os == 'Linux' }}
-        uses: schneegans/dynamic-badges-action@v1.1.0
+        uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 2ec45ded898fa11f2c42bcb9d2b163cf
