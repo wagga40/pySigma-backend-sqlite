@@ -341,6 +341,27 @@ def test_sqlite_fts_keywords_num(sqlite_backend: sqliteBackend):
         == "Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
     )
 
+def test_sqlite_value_case_sensitive_contains(sqlite_backend: sqliteBackend):
+    assert (
+        sqlite_backend.convert(
+            SigmaCollection.from_yaml(
+                """
+            title: Test
+            status: test
+            logsource:
+                category: test_category
+                product: test_product
+            detection:
+                sel:
+                    fieldA|contains|cased: VaLuE
+                condition: sel
+        """
+            )
+        )
+        == [
+            "SELECT * FROM <TABLE_NAME> WHERE fieldA GLOB '*VaLuE*' ESCAPE '\\'"
+        ]
+    )
 
 def test_sqlite_zircolite_output(sqlite_backend: sqliteBackend):
     rule = SigmaCollection.from_yaml(
