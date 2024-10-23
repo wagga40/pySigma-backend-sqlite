@@ -74,23 +74,21 @@ class sqliteBackend(TextQueryBackend):
         True  # Negate field_quote_pattern result. Field name is quoted if pattern doesn't matches if set to True (default).
     )
 
-    ### Escaping
-    # field_escape : ClassVar[str] = "\\"               # Character to escape particular parts defined in field_escape_pattern.
-    # field_escape_quote : ClassVar[bool] = True        # Escape quote string defined in field_quote
-    # field_escape_pattern : ClassVar[Pattern] = re.compile("\\s")   # All matches of this pattern are prepended with the string contained in field_escape.
-
     ## Values
     str_quote: ClassVar[str] = (
         "'"  # string quoting character (added as escaping character)
     )
-    # str_quote_pattern: ClassVar[Pattern] = re.compile(r"^.*%{1,}.*|.*_{1,}.*$")
-    # str_quote_pattern_negation: ClassVar[bool] = True
 
     escape_char: ClassVar[str] = (
         "\\"  # Escaping character for special characters inside string
     )
     wildcard_multi: ClassVar[str] = "%"  # Character used as multi-character wildcard
     wildcard_single: ClassVar[str] = "_"  # Character used as single-character wildcard
+
+    # Special case for case sensitive string matching
+    wildcard_glob : ClassVar[str] = "*"  # Character used as glob wildcard
+    wildcard_glob_single : ClassVar[str] = "?"  # Character used as glob wildcard
+
     add_escaped: ClassVar[str] = (
         "\\"  # Characters quoted in addition to wildcards and string quote
     )
@@ -109,6 +107,8 @@ class sqliteBackend(TextQueryBackend):
     wildcard_match_expression: ClassVar[str] = (
         "{field} LIKE '{value}' ESCAPE '\\'"  # Special expression if wildcards can't be matched with the eq_token operator
     )
+
+    field_exists_expression: ClassVar[str] = "{field} = {field}"
 
     # Special expression if wildcards can't be matched with the eq_token operator
     wildcard_match_str_expression: ClassVar[str] = "{field} LIKE '{value}' ESCAPE '\\'"
@@ -133,6 +133,8 @@ class sqliteBackend(TextQueryBackend):
     # By default, i, m and s are defined. If a flag is not supported by the target query language,
     # remove it from re_flags or don't define it to ensure proper error handling in case of appearance.
     # re_flags : Dict[SigmaRegularExpressionFlag, str] = {}
+
+    case_sensitive_match_expression: ClassVar[str] = "{field} GLOB {value} ESCAPE '\\'"
 
     # Numeric comparison operators
     compare_op_expression: ClassVar[str] = (
@@ -199,16 +201,26 @@ class sqliteBackend(TextQueryBackend):
     table = "<TABLE_NAME>"
 
     def convert_value_str(
-        self, s: SigmaString, state: ConversionState, no_quote: bool = False
+        self, s: SigmaString, state: ConversionState, no_quote: bool = False, glob_wildcards: bool = False
     ) -> str:
         """Convert a SigmaString into a plain string which can be used in query."""
-        converted = s.convert(
-            self.escape_char,
-            self.wildcard_multi,
-            self.wildcard_single,
-            self.add_escaped,
-            self.filter_chars,
-        )
+
+        if glob_wildcards:
+            converted = s.convert(
+                escape_char=self.escape_char,
+                wildcard_multi=self.wildcard_glob,
+                wildcard_single=self.wildcard_glob_single,
+                add_escaped=self.add_escaped,
+                filter_chars=self.filter_chars,
+            )
+        else:
+            converted = s.convert(
+                escape_char=self.escape_char,
+                wildcard_multi=self.wildcard_multi,
+                wildcard_single=self.wildcard_single,
+                add_escaped=self.add_escaped,
+                filter_chars=self.filter_chars,
+            )
 
         converted = converted.replace(
             "'", "''"
@@ -284,6 +296,63 @@ class sqliteBackend(TextQueryBackend):
         except TypeError:  # pragma: no cover
             raise NotImplementedError(
                 "Field equals string value expressions with strings are not supported by the backend."
+            )
+
+    def convert_condition_field_eq_val_str_case_sensitive(
+        self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        """Conversion of case-sensitive field = string value expressions"""
+        try:
+            if (  # Check conditions for usage of 'startswith' operator
+                self.case_sensitive_startswith_expression
+                is not None  # 'startswith' operator is defined in backend
+                and cond.value.endswith(SpecialChars.WILDCARD_MULTI)  # String ends with wildcard
+                and (
+                    self.case_sensitive_startswith_expression_allow_special
+                    or not cond.value[:-1].contains_special()
+                )  # Remainder of string doesn't contains special characters or it's allowed
+            ):
+                expr = (
+                    self.case_sensitive_startswith_expression
+                )  # If all conditions are fulfilled, use 'startswith' operator instead of equal token
+                value = cond.value[:-1]
+            elif (  # Same as above but for 'endswith' operator: string starts with wildcard and doesn't contains further special characters
+                self.case_sensitive_endswith_expression is not None
+                and cond.value.startswith(SpecialChars.WILDCARD_MULTI)
+                and (
+                    self.case_sensitive_endswith_expression_allow_special
+                    or not cond.value[1:].contains_special()
+                )
+            ):
+                expr = self.case_sensitive_endswith_expression
+                value = cond.value[1:]
+            elif (  # contains: string starts and ends with wildcard
+                self.case_sensitive_contains_expression is not None
+                and cond.value.startswith(SpecialChars.WILDCARD_MULTI)
+                and cond.value.endswith(SpecialChars.WILDCARD_MULTI)
+                and (
+                    self.case_sensitive_contains_expression_allow_special
+                    or not cond.value[1:-1].contains_special()
+                )
+            ):
+                expr = self.case_sensitive_contains_expression
+                value = cond.value[1:-1]
+            elif self.case_sensitive_match_expression is not None:
+                expr = self.case_sensitive_match_expression
+                value = cond.value
+            else:
+                raise NotImplementedError(
+                    "Case-sensitive string matching is not supported by backend."
+                )
+        
+            return expr.format(
+                field=self.escape_and_quote_field(cond.field),
+                value=self.convert_value_str(value, state, no_quote=False, glob_wildcards=True),
+                regex=self.convert_value_re(value.to_regex(self.add_escaped_re), state),
+            )
+        except TypeError:  # pragma: no cover
+            raise NotImplementedError(
+                "Case-sensitive field equals string value expressions with strings are not supported by the backend."
             )
 
     def convert_condition_field_eq_val_cidr(

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pySigma-backend-sqlite"
-version = "0.1.2"
+version = "0.2.0"
 description = "pySigma sqlite backend"
 readme = "README.md"
 authors = ["wagga"]
@@ -11,8 +11,8 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
-pysigma = "^0.11"
+python = "^3.9"
+pysigma = "^0.11.17"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.1"
@@ -36,12 +36,13 @@ authors = [
     {name = "wagga", email = "wagga"},
 ]
 license = {text = "LGPL-3.0-only"}
-requires-python = ">=3.8,<4.0"
+requires-python = ">=3.9,<4.0"
 dependencies = [
-    "pysigma>=0.11",
+    "pysigma>=0.11.17",
 ]
+
 name = "pySigma-backend-sqlite"
-version = "0.1.2"
+version = "0.2.0"
 description = "pySigma sqlite backend"
 
 [project.urls]
