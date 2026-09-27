@@ -54,6 +54,8 @@ requested correlations are emitted; reference-only children are compiled.
 
 Use `required_fields` to provision absent columns as NULL. The old SQL scanner
 cannot reliably discover fields inside functions or CTE/window queries.
+Search-text columns declared by `fulltext` are an exception: validate them
+before widening and never synthesize them as NULL.
 Use `correlation_plan` with `sigma.backends.sqlite.runtime.execute_plan` for
 indexed execution and full event evidence. The `rule` list remains available
 for consumers that execute standalone SELECT statements.
@@ -64,7 +66,10 @@ Do not exclude a rule merely because its Channel allow-list is empty.
 
 ## Coverage and operations
 
-Keyword/fieldless detections remain explicitly unsupported. IPv6 CIDR spelling,
+Keyword/fieldless detections require the optional `fulltext_field` setting and
+consumer-provided text. They use schema/plan version 3; see
+[keyword search](keyword-search.md) before distributing these rulesets.
+Existing version-2 output for other rules is unchanged. IPv6 CIDR spelling,
 Python REGEXP compatibility and SQLite's ASCII case folding remain limitations.
 Run `tools/audit_corpus.py` against a pinned Sigma checkout; conversion and SQL
 preparation counts are not evidence of detection accuracy.

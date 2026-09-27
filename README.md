@@ -195,9 +195,44 @@ See [the migration guide](docs/migration-v2.md).
 * **Wildcard escaping**: Proper escaping of `%` and `_` characters in values, including values read from a second field by `|fieldref`
 * **Table name**: `logs` for both output formats; both honour a `setState` transformation on the `table` key
 
+### Keyword searches
+
+Set `fulltext_field` to a column containing searchable event text to enable
+fieldless Sigma selections:
+
+```python
+backend = sqliteBackend(fulltext_field="_sigma_fulltext")
+```
+
+For example, `selection: ['event::clear', 'event::drop']` becomes OR-connected
+substring predicates using `LIKE ... ESCAPE '\'`. Sigma `*` and `?` wildcards
+retain their meaning; punctuation and literal SQL wildcard characters remain
+literal. Keyword `|all`, negation, combinations with named fields, numbers,
+`|cased`, and `|re` are supported. Numbers are searched as text, `|cased` uses
+`GLOB`, and `|re` still requires a registered regular-expression function.
+No FTS5 virtual table is required. Without `fulltext_field`, keyword conversion
+raises an error rather than guessing which data should be searched.
+
+The consumer must supply the text: the backend does not reconstruct it from
+arbitrary database columns. The `source-values-v1` representation joins original
+decoded scalar values with newlines, before field exclusions or transforms, and
+does not include field names or generated metadata. Wildcards can span separators;
+different `|all` terms can occur in different source values. SQLite's existing
+case-folding and text-matching limitations still apply.
+
+Text-dependent Zircolite entries use `schema_version: 3` and declare their
+`fulltext` prerequisites. Text-dependent correlation plans use version 3 too;
+other output retains version 2. Updated consumers validate searchable columns
+before execution instead of treating missing text as a non-match. See
+[keyword search](docs/keyword-search.md) for the contract and Zircolite integration.
+
 ## Known issues/limitations
 
-* Full text search support will need some work and is not a priority since it needs virtual tables on SQLite side. Sigma rules using value-only (`keywords`) detections — about 3% of SigmaHQ — raise `SigmaFeatureNotSupportedByBackendError`
+* Keyword searches require `fulltext_field` and consumer-provided search text.
+  Saved databases without original event text need re-ingestion to support the
+  `source-values-v1` representation; flattened columns cannot reconstruct it.
+  Substring predicates scan eligible rows, so broad keyword rules can be slower
+  than indexed field selections.
 * `|re` is emitted as `field REGEXP 'pattern'`. SQLite has no built-in `REGEXP`, so the caller must register one; it should return false for a `NULL` input, as Zircolite's does, so that a regex on an absent field is false rather than an error
 * `|cidr` is expanded into `LIKE` prefixes, since SQLite has no network type. For IPv6 this only matches addresses written in the same canonical form as the expansion
 * The backend cannot know the target schema, so a rule naming a column the database does not have fails to prepare, taking its other branches with it. Zircolite widens its table with the missing columns as `NULL`; another consumer has to do the same

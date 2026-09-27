@@ -1,0 +1,952 @@
+diff --git a/docs/Advanced.md b/docs/Advanced.md
+index 65bfd2b..f086bf5 100644
+--- a/docs/Advanced.md
++++ b/docs/Advanced.md
+@@ -715,3 +715,39 @@ Zircolite is also driven by third-party tooling:
+   has a [module](https://github.com/EricZimmerman/KapeFiles/tree/master/Modules/Apps/GitHub).
+ - [Velociraptor](https://github.com/Velocidex/velociraptor) has an
+   [artifact](https://docs.velociraptor.app/exchange/artifacts/pages/windows.eventlogs.zircolite/).
++
++## Keyword search in Sigma rules
++
++Sigma detections can search for a word without naming an event field:
++
++```yaml
++detection:
++  keywords:
++    - suspicious command
++  condition: keywords
++```
++
++When a loaded rule or correlation needs keyword search, Zircolite captures the
++original decoded event values during ingestion and stores them in its private
++`_sigma_fulltext` column. It walks object keys in sorted order and array items in
++source order, writing scalar values on separate lines. This happens before field
++mappings, exclusions, transforms, flattening and generated metadata, so a word
++in an excluded or transformed source value can still match. Empty events store
++an empty string. The search text is omitted from matches, correlation evidence,
++CSV/JSON output and `--keepflat` exports. It is not indexed by `--auto-index`.
++
++Rules converted by this version carry `schema_version: 3` and a `fulltext`
++requirement when they need that column. Correlation plans that depend on such
++rules use version 3. Existing rules and plans remain version 2. A saved database
++retains the text and its `_zircolite_fulltext` provenance table. Databases made
++before this feature must be **re-ingested** to run keyword-dependent rules;
++Zircolite reports those rules as unevaluable while continuing independent
++rules. Adding a column manually to an old database does not reconstruct the
++original values. A source field or mapping named `_sigma_fulltext` is rejected
++when capture is enabled.
++
++Library users can capture before rules are loaded by passing
++`ProcessingConfig(fulltext_capture=True)` to `ZircoliteCore` or
++`StreamingEventProcessor`. Loading rules with `core.load_ruleset_from_var(...)`
++before `core.run_streaming(...)` also enables capture. The command-line
++processing modes derive this setting from the loaded rules automatically.
+diff --git a/docs/Internals.md b/docs/Internals.md
+index 228f89d..649155b 100644
+--- a/docs/Internals.md
++++ b/docs/Internals.md
+@@ -630,3 +630,17 @@ ruleset is still lexed once.
+ 
+ The literal prefilter plans the rewritten form (a negation never narrows its candidates),
+ and the Channel/EventID bounds read from it are unchanged.
++
++### Keyword source values
++
++Keyword-dependent Sigma rules use a private `_sigma_fulltext` TEXT column in
++`logs`. The streaming processor builds it from decoded scalar values before
++flattening or generated metadata, including values that later mappings or
++exclusions hide. `ProcessingContext` enables capture before ingestion whenever
++its loaded rules or correlation dependencies require it, including unified and
++per-file runs and their workers. The provenance table `_zircolite_fulltext`
++records `logs`, `_sigma_fulltext`, and `source-values-v1` and travels with saved
++databases. The core validates provenance and non-NULL TEXT coverage before
++running a dependent rule or plan, caching successful checks per content
++revision. Insertion, reset and database load invalidate that cache. Old
++version-2 rules and plans run without the private column.
+diff --git a/docs/Usage.md b/docs/Usage.md
+index 29b6df6..3d5b023 100644
+--- a/docs/Usage.md
++++ b/docs/Usage.md
+@@ -953,8 +953,11 @@ back to `./rules`, with a warning, when that directory cannot be written to.
+ A JSON ruleset is an array of rules, each with its `title`, `level`, `tags` and the SQL it
+ runs (`rule`). Rulesets converted by pySigma's SQLite backend 2 also carry
+ `schema_version: 2`, the fields each rule reads (`required_fields`) and, for a
+-correlation, its `correlation_plan`. A ruleset of a newer schema than this Zircolite
+-reads is refused with a message rather than run.
++correlation, its `correlation_plan`. Keyword-dependent rules carry
++`schema_version: 3` and a `fulltext` requirement; dependent correlation plans
++use version 3. A ruleset of a newer schema than this Zircolite reads is refused
++with a message rather than run. See [keyword search](Advanced.md#keyword-search-in-sigma-rules)
++for capture and saved-database behavior.
+ 
+ Native Sigma rules in YAML work directly — Zircolite detects the format and converts them
+ with [pySigma](https://github.com/SigmaHQ/pySigma):
+diff --git a/tests/test_correlations.py b/tests/test_correlations.py
+index 5139474..321b75d 100644
+--- a/tests/test_correlations.py
++++ b/tests/test_correlations.py
+@@ -273,7 +273,7 @@ PLAN_RULE = {
+ 
+ class TestRulesetFormat:
+     def test_a_newer_schema_is_refused(self):
+-        problem = ruleset_format_problem([{"title": "t", "schema_version": 3, "rule": ["SELECT 1"]}])
++        problem = ruleset_format_problem([{"title": "t", "schema_version": 4, "rule": ["SELECT 1"]}])
+ 
+         assert "update Zircolite" in problem
+ 
+diff --git a/tests/test_keyword_search.py b/tests/test_keyword_search.py
+new file mode 100644
+index 0000000..95b7fe2
+--- /dev/null
++++ b/tests/test_keyword_search.py
+@@ -0,0 +1,297 @@
++"""Execution contracts for keyword search over original event values."""
++import io
++import json
++import sqlite3
++
++import pytest
++
++from zircolite import ProcessingConfig, ZircoliteCore
++from zircolite.rules import RulesetHandler, ruleset_format_problem
++from zircolite.streaming import StreamingEventProcessor
++
++REQUIREMENT = [{"table": "logs", "field": "_sigma_fulltext", "representation": "source-values-v1"}]
++
++
++def _rule(sql, *, keyword=True):
++    rule = {"title": "keyword", "schema_version": 3 if keyword else 2, "rule": [sql]}
++    if keyword:
++        rule["fulltext"] = REQUIREMENT
++    return rule
++
++
++@pytest.mark.parametrize("backend", ["python", "cython"])
++def test_original_values_capture_and_export(field_mappings_file, default_args_config, test_logger, tmp_path, backend):
++    path = tmp_path / "events.json"
++    path.write_text(json.dumps({"z": [True, None, 42], "a": {"hidden": "Needle"}}) + "\n")
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True, flatten_backend=backend), logger=test_logger)
++    try:
++        flattened = io.BytesIO()
++        core.run_streaming([path], input_type="json", args_config=default_args_config, keepflat_file=flattened)
++        assert core.metrics.data["flattening"]["selected"] == backend
++        assert "_sigma_fulltext" not in flattened.getvalue().decode()
++        row = core.db_connection.execute('SELECT _sigma_fulltext FROM logs').fetchone()
++        assert row == ("Needle\ntrue\n42",)
++        assert core.db_connection.execute('SELECT * FROM _zircolite_fulltext').fetchall() == [("logs", "_sigma_fulltext", "source-values-v1")]
++        result = core.execute_rule(_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'"))
++        assert result["count"] == 1
++        assert "_sigma_fulltext" not in result["matches"][0]
++        core.save_db_to_disk(str(tmp_path / "saved.db"))
++    finally:
++        core.close()
++
++
++def test_old_database_keeps_independent_rules(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        core.create_db('"Message" TEXT')
++        assert core.insert_data_to_db({"Message": "Needle"})
++        assert core.execute_rule(_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'")) == {}
++        assert "re-ingest" in core.rules_in_error["keyword"].lower()
++        assert core.execute_rule(_rule("SELECT * FROM logs WHERE Message='Needle'", keyword=False))["count"] == 1
++    finally:
++        core.close()
++
++
++def test_reserved_source_rejected(field_mappings_file, default_args_config, test_logger):
++    processor = StreamingEventProcessor(field_mappings_file, default_args_config, ProcessingConfig(fulltext_capture=True, flatten_backend="python"), logger=test_logger)
++    with pytest.raises(ValueError, match="reserved"):
++        processor._flatten_event({"_SIGMA_FULLTEXT": "user"}, "source.json")
++
++
++def test_schema_three_and_branch_union(test_logger):
++    assert ruleset_format_problem([_rule("SELECT 1")]) is None
++    merged = RulesetHandler._merge_converted_queries([
++        _rule("SELECT 1", keyword=False), _rule("SELECT 2")
++    ])
++    assert merged["schema_version"] == 3
++    assert merged["fulltext"] == REQUIREMENT
++
++
++def test_converted_sigma_keyword_runs_after_streaming(field_mappings_file, default_args_config, test_logger, tmp_path):
++    from zircolite.config import RulesetConfig
++
++    rules = tmp_path / "keyword.yml"
++    rules.write_text("""title: Source keyword
++id: 77777777-7777-4777-8777-777777777777
++logsource:
++  category: test
++detection:
++  keywords:
++    - Needle
++  condition: keywords
++level: high
++""")
++    handler = RulesetHandler(RulesetConfig(ruleset=[str(rules)]), logger=test_logger)
++    assert len(handler.rulesets) == 1
++    rule = handler.rulesets[0]
++    assert rule["fulltext"] == REQUIREMENT
++    events = tmp_path / "events.json"
++    events.write_text(json.dumps({"nested": {"source": "Needle"}}) + "\n")
++    core = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        core.load_ruleset_from_var(handler.rulesets, None)
++        core.run_streaming([events], input_type="json", args_config=default_args_config)
++        result = core.execute_rule(rule)
++        assert result["count"] == 1
++        assert "_sigma_fulltext" not in result["matches"][0]
++    finally:
++        core.close()
++
++
++def test_saved_database_and_missing_coverage(field_mappings_file, test_logger, tmp_path):
++    saved = tmp_path / "events.db"
++    source = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        source.create_db('"Message" TEXT')
++        assert source.insert_data_to_db({"Message": "Needle"})
++        source.save_db_to_disk(str(saved))
++    finally:
++        source.close()
++    loaded = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        loaded.load_db_in_memory(str(saved))
++        assert loaded.execute_rule(_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'"))["count"] == 1
++        with sqlite3.connect(saved) as disk:
++            disk.execute("UPDATE logs SET _sigma_fulltext=NULL")
++        loaded.load_db_in_memory(str(saved))
++        assert loaded.execute_rule(_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'")) == {}
++        assert "re-ingest" in loaded.rules_in_error["keyword"].lower()
++    finally:
++        loaded.close()
++
++
++def test_keyword_correlation_and_v2_evidence_are_private(field_mappings_file, test_logger, tmp_path):
++    from zircolite.config import RulesetConfig
++
++    rules = tmp_path / "correlation.yml"
++    rules.write_text("""---
++title: Keyword base
++name: keyword_base
++id: 11111111-1111-4111-8111-111111111111
++logsource:
++  product: windows
++  service: sysmon
++detection:
++  keywords:
++    - Needle
++  condition: keywords
++level: high
++---
++title: Keyword burst
++id: 22222222-2222-4222-8222-222222222222
++correlation:
++  type: event_count
++  rules:
++    - keyword_base
++  group-by:
++    - Image
++  timespan: 5m
++  condition:
++    gte: 2
++level: high
++""")
++    handler = RulesetHandler(RulesetConfig(ruleset=[str(rules)], pipeline=[["sysmon"]]), logger=test_logger)
++    rule = handler.rulesets[0]
++    assert rule["schema_version"] == rule["correlation_plan"]["version"] == 3
++    assert rule["fulltext"] == rule["correlation_plan"]["fulltext"] == REQUIREMENT
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        core.create_db('"SystemTime" TEXT, "Channel" TEXT, "EventID" INTEGER, "Image" TEXT, "Message" TEXT')
++        assert core.insert_data_to_db([
++            {"SystemTime": f"2026-01-01T00:00:0{i}Z", "Channel": "Microsoft-Windows-Sysmon/Operational",
++             "EventID": 1, "Image": "cmd.exe", "Message": "Needle"}
++            for i in range(2)
++        ])
++        alert = core.execute_rule(rule)["matches"][0]
++        assert "_sigma_fulltext" not in alert["evidence"][0]["event"]
++        old_plan = dict(rule["correlation_plan"], version=2)
++        old_plan.pop("fulltext")
++        old_rule = dict(rule, schema_version=2, correlation_plan=old_plan)
++        old_rule.pop("fulltext")
++        alert = core.execute_rule(old_rule)["matches"][0]
++        assert "_sigma_fulltext" not in alert["evidence"][0]["event"]
++    finally:
++        core.close()
++
++
++def test_processing_factories_enable_capture_before_rules_load(make_processing_context):
++    from zircolite.processing import create_worker_core, create_zircolite_core
++
++    ctx = make_processing_context(rulesets=[{"title": "correlation", "correlation_plan": {"fulltext": REQUIREMENT}}])
++    for factory in (lambda: create_zircolite_core(ctx), lambda: create_worker_core(ctx, 0)):
++        core = factory()
++        try:
++            assert core.fulltext_capture
++            assert core.ruleset == []
++        finally:
++            core.close()
++
++
++def test_empty_direct_schema_with_capture(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        core.create_db("")
++        assert core.db_connection.execute('PRAGMA table_info(logs)').fetchall()[-1][1:3] == ("_sigma_fulltext", "TEXT")
++    finally:
++        core.close()
++
++
++def test_mapped_reserved_field_rejected(default_args_config, test_logger, tmp_path, minimal_field_mappings):
++    config = dict(minimal_field_mappings)
++    config["mappings"] = {"Event.Message": "_SIGMA_FULLTEXT"}
++    path = tmp_path / "mapping.json"
++    path.write_text(json.dumps(config))
++    with pytest.raises(ValueError, match="reserved"):
++        StreamingEventProcessor(str(path), default_args_config,
++                                ProcessingConfig(fulltext_capture=True), logger=test_logger)
++
++
++def test_unrelated_provenance_table_rejected(field_mappings_file, default_args_config, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        core.db_connection.execute('CREATE TABLE _zircolite_fulltext (other TEXT)')
++        processor = StreamingEventProcessor(field_mappings_file, default_args_config,
++                                            ProcessingConfig(fulltext_capture=True), logger=test_logger)
++        with pytest.raises(ValueError, match="unrelated"):
++            processor.create_initial_table(core.db_connection)
++    finally:
++        core.close()
++
++
++def test_schema_three_requires_matching_plan_requirements():
++    malformed = _rule("SELECT 1")
++    malformed["fulltext"] = []
++    assert "lacks fulltext" in ruleset_format_problem([malformed])
++    malformed["fulltext"] = REQUIREMENT
++    malformed["correlation"] = True
++    malformed["correlation_plan"] = {"version": 3, "fulltext": []}
++    assert "inconsistent" in ruleset_format_problem([malformed])
++
++
++def test_preflight_cache_invalidated_by_insert(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    rule = _rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'")
++    try:
++        core.create_db('"Message" TEXT')
++        assert core.insert_data_to_db({"Message": "Needle"})
++        assert core.execute_rule(rule)["count"] == 1
++        core.fulltext_capture = False
++        assert core.insert_data_to_db({"Message": "other"})
++        assert core.execute_rule(rule) == {}
++        assert "incomplete" in core.rules_in_error["keyword"].lower()
++    finally:
++        core.close()
++
++
++@pytest.mark.parametrize("mode", ["unified", "perfile", "thread", "process"])
++def test_processing_modes_capture_before_ingestion(mode, make_processing_context,
++                                                  default_args_config, tmp_path):
++    from argparse import Namespace
++
++    from zircolite.processing import (
++        process_parallel_streaming,
++        process_perfile_streaming,
++        process_unified_streaming,
++    )
++
++    files = [tmp_path / f"event{i}.json" for i in range(2)]
++    for path in files:
++        path.write_text(json.dumps({"nested": {"source": "Needle"}}) + "\n")
++    ctx = make_processing_context(rulesets=[_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'")])
++    args = Namespace(**vars(default_args_config))
++    args.executor = mode if mode in ("thread", "process") else "thread"
++    args.parallel_workers = 2
++    args.parallel_adaptive = False
++    if mode == "unified":
++        core, results = process_unified_streaming(ctx, files, "json", None, args)
++        core.close()
++    elif mode == "perfile":
++        _, results = process_perfile_streaming(ctx, files, "json", None, args)
++    else:
++        _, results = process_parallel_streaming(ctx, files, "json", None, args)
++    assert sum(result["count"] for result in results) == 2
++    assert all("_sigma_fulltext" not in match for result in results for match in result["matches"])
++
++
++def test_reset_preserves_unrelated_reserved_table(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        core.db_connection.execute('CREATE TABLE _zircolite_fulltext (other TEXT)')
++        with pytest.raises(ValueError, match="unrelated"):
++            core.reset_logs_table()
++        assert core.db_connection.execute(
++            "SELECT name FROM sqlite_master WHERE name='_zircolite_fulltext'"
++        ).fetchone()
++    finally:
++        core.close()
++
++
++def test_longer_column_name_is_not_reserved(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        core.create_db('"_sigma_fulltext_suffix" TEXT')
++        columns = [row[1] for row in core.db_connection.execute('PRAGMA table_info(logs)')]
++        assert "_sigma_fulltext_suffix" in columns
++        assert "_sigma_fulltext" in columns
++    finally:
++        core.close()
+diff --git a/zircolite/config.py b/zircolite/config.py
+index a98a41d..9676034 100644
+--- a/zircolite/config.py
++++ b/zircolite/config.py
+@@ -37,6 +37,7 @@ class ProcessingConfig:
+     working_db_dir: str | None = None
+     sqlite_cache_mib: int = 64
+     flatten_backend: str = "auto"
++    fulltext_capture: bool = False
+     rule_prefilter: str = "auto"
+ 
+     # Output options
+diff --git a/zircolite/core.py b/zircolite/core.py
+index d16fb55..00b0507 100644
+--- a/zircolite/core.py
++++ b/zircolite/core.py
+@@ -55,6 +55,14 @@ from .correlations import (
+     plan_problem,
+ )
+ from .formats import json_array_requested
++from .fulltext import (
++    FIELD,
++    clean,
++    ensure_provenance,
++    require_provenance,
++    reset_provenance,
++    source_values,
++)
+ from .performance import FileMetrics, timed_stage
+ from .prefilter import prepare_rules, rule_queries
+ from .results import RowSpool, write_result_json
+@@ -157,6 +165,8 @@ class ZircoliteCore:
+         "_cursor",
+         "_disk_working",
+         "_escape_cache",
++        "_fulltext_revision",
++        "_fulltext_validated",
+         "_has_correlation_plans",
+         "_logs_columns_lower",
+         "_lossless_columns",
+@@ -179,6 +189,7 @@ class ZircoliteCore:
+         "first_json_output",
+         "flatten_backend",
+         "full_results",
++        "fulltext_capture",
+         "hashes",
+         "limit",
+         "logger",
+@@ -224,6 +235,9 @@ class ZircoliteCore:
+         self._disk_working = proc.working_db == "disk"
+         self.sqlite_cache_mib = proc.sqlite_cache_mib
+         self.flatten_backend = proc.flatten_backend
++        self.fulltext_capture = proc.fulltext_capture
++        self._fulltext_revision = 0
++        self._fulltext_validated: set[tuple] = set()
+         self.rule_prefilter = proc.rule_prefilter
+         if self.flatten_backend == "cython":
+             from .streaming import select_flatten_kernel
+@@ -422,8 +436,11 @@ class ZircoliteCore:
+ 
+     def create_db(self, field_stmt: str) -> None:
+         """Create the database table with the specified field statement."""
+-        cleaned_field_stmt = field_stmt.strip()
+-        cleaned_field_stmt = cleaned_field_stmt.removesuffix(',')
++        cleaned_field_stmt = field_stmt.strip().removesuffix(',')
++        if self.fulltext_capture:
++            if re.search(r'(?i)(?<![A-Za-z0-9_])(?:"_sigma_fulltext"|`_sigma_fulltext`|\[_sigma_fulltext\]|_sigma_fulltext)(?![A-Za-z0-9_])', cleaned_field_stmt):
++                raise ValueError(f"Schema uses reserved keyword-search name {FIELD}")
++            cleaned_field_stmt = ', '.join(filter(None, (cleaned_field_stmt, '"_sigma_fulltext" TEXT')))
+         if cleaned_field_stmt:
+             create_table_stmt = f"CREATE TABLE logs ( row_id INTEGER PRIMARY KEY AUTOINCREMENT, {cleaned_field_stmt} );"
+         else:
+@@ -449,10 +466,14 @@ class ZircoliteCore:
+         self._cursor = None
+         self._logs_columns_lower = None
+         self._auto_index_applied = False
++        self._fulltext_revision += 1
++        self._fulltext_validated.clear()
+         conn = self.db_connection
+         if conn is None:
+             return
+         try:
++            if self.fulltext_capture:
++                reset_provenance(conn)
+             conn.execute("DROP TABLE IF EXISTS logs")
+             conn.commit()
+         except sqlite3.Error as exc:
+@@ -540,7 +561,7 @@ class ZircoliteCore:
+                 if isinstance(sql_query, str):
+                     referenced |= scan_query(sql_query).columns
+             for candidate in referenced:
+-                if candidate.lower() in already_indexed_lower:
++                if candidate.lower() == FIELD or candidate.lower() in already_indexed_lower:
+                     continue
+                 actual = columns_by_lower.get(candidate.lower())
+                 if actual is None:
+@@ -809,7 +830,7 @@ class ZircoliteCore:
+                 remaining = max_rows
+                 while rows := cursor.fetchmany(256 if remaining is None else min(256, remaining)):
+                     for row in rows:
+-                        yield {k: v for k, v in zip(col_names, row, strict=True) if v is not None}
++                        yield {k: v for k, v in zip(col_names, row, strict=True) if v is not None and k.lower() != FIELD}
+                     if remaining is not None:
+                         remaining -= len(rows)
+                         if remaining <= 0:
+@@ -867,6 +888,8 @@ class ZircoliteCore:
+         self._auto_index_applied = False
+         self._logs_columns_lower = None
+         self._lossless_schema_version = -1
++        self._fulltext_revision += 1
++        self._fulltext_validated.clear()
+ 
+     def escape_identifier(self, identifier: str) -> str:
+         """Escape SQL identifiers like table or column names with caching."""
+@@ -901,6 +924,10 @@ class ZircoliteCore:
+         if conn is None:
+             return False
+ 
++        if self.fulltext_capture:
++            batch = [dict(row, **{FIELD: source_values(row)}) for row in batch]
++            ensure_provenance(conn)
++
+         try:
+             conn.execute('BEGIN TRANSACTION')
+ 
+@@ -937,6 +964,8 @@ class ZircoliteCore:
+                 conn.executemany(insert_stmt, values_list)
+ 
+             conn.execute('COMMIT')
++            self._fulltext_revision += 1
++            self._fulltext_validated.clear()
+             return True
+         except Exception as e:
+             conn.execute('ROLLBACK')
+@@ -961,6 +990,20 @@ class ZircoliteCore:
+         finally:
+             on_disk_db.close()
+ 
++    def _validate_fulltext(self, requirements: Any) -> None:
++        if self.db_connection is None:
++            raise ValueError("Keyword search has no database; re-ingest events")
++        from sigma.backends.sqlite import runtime
++
++        # The backend owns requirement shape and TEXT coverage validation.
++        # The revision cache avoids scanning all rows for every keyword rule.
++        key = (self._fulltext_revision, repr(requirements))
++        if key in self._fulltext_validated:
++            return
++        runtime.validate_fulltext(self.db_connection, requirements)  # type: ignore[attr-defined]
++        require_provenance(self.db_connection, requirements)
++        self._fulltext_validated.add(key)
++
+     def execute_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+         return self._execute_rule(rule)
+ 
+@@ -981,6 +1024,12 @@ class ZircoliteCore:
+         filtered_rows: RowSpool | list[dict[str, Any]] = RowSpool() if stream_rows else []
+         rule_title = rule.get("title", "Unnamed Rule")
+         required = [field for field in rule.get("required_fields") or () if isinstance(field, str)]
++        if rule.get("schema_version") == 3:
++            try:
++                self._validate_fulltext(rule.get("fulltext"))
++            except (ValueError, sqlite3.Error) as exc:
++                self._note_broken_rule(rule_title, exc)
++                return {}
+         try:
+             for sql_query in sigma_queries:
+                 checkpoint = filtered_rows.checkpoint() if isinstance(filtered_rows, RowSpool) else len(filtered_rows)
+@@ -1048,6 +1097,12 @@ class ZircoliteCore:
+ 
+         # A dense window can keep one statement busy for minutes; the handler
+         # lets Ctrl+C stop it instead of waiting for the next rule.
++        if plan.get("version") == 3:
++            try:
++                self._validate_fulltext(plan.get("fulltext"))
++            except (ValueError, sqlite3.Error) as exc:
++                self._note_broken_rule(title, exc)
++                return {}
+         conn.set_progress_handler(is_shutdown_requested, 10_000)
+         try:
+             rows, diagnostics = execute_plan(
+@@ -1076,7 +1131,8 @@ class ZircoliteCore:
+         matches: RowSpool | list[dict[str, Any]] = RowSpool() if stream_rows else []
+         try:
+             for alert in alerts:
+-                matches.append(sanitize_row_for_csv(alert) if self.csv_mode else alert)
++                safe_alert = clean(alert)
++                matches.append(sanitize_row_for_csv(safe_alert) if self.csv_mode else safe_alert)
+         except BaseException:
+             if isinstance(matches, RowSpool):
+                 matches.close()
+@@ -1119,6 +1175,8 @@ class ZircoliteCore:
+             self.ruleset = [rule for rule in self.ruleset if not any(rule_filter in rule.get("title", "") for rule_filter in rule_filters)]
+         self._prepared = prepare_rules(rule_queries(self.ruleset))
+         self._has_correlation_plans = any(is_correlation_plan_rule(rule) for rule in self.ruleset)
++        if any(rule.get("fulltext") for rule in self.ruleset):
++            self.fulltext_capture = True
+ 
+     @timed_stage("output")
+     def _write_result_to_output(
+@@ -1214,7 +1272,7 @@ class ZircoliteCore:
+         except sqlite3.Error as exc:
+             self.logger.debug(f"Could not read the logs schema for the CSV header: {exc}")
+             columns = []
+-        columns = [c for c in columns if c != "row_id"]
++        columns = [c for c in columns if c != "row_id" and c.lower() != FIELD]
+         if columns:
+             return columns
+         return list(rule_results["matches"][0].keys())
+@@ -1735,6 +1793,7 @@ class ZircoliteCore:
+             batch_size=self.batch_size,
+             evtx_threads=self.evtx_threads,
+             flatten_backend=self.flatten_backend,
++            fulltext_capture=self.fulltext_capture,
+         )
+         processor = StreamingEventProcessor(
+             config_file=self.config,
+@@ -1751,6 +1810,10 @@ class ZircoliteCore:
+             + (f" ({processor.flattening_info['reason']})" if processor.flattening_info.get("reason") else "")
+         )
+ 
++        # A failed or interrupted stream may have committed earlier batches.
++        # Invalidate before ingestion so even that partial content is rechecked.
++        self._fulltext_revision += 1
++        self._fulltext_validated.clear()
+         # Create initial table structure
+         self.logger.info("[+] Creating dynamic model")
+         processor.create_initial_table(self.db_connection)
+diff --git a/zircolite/correlations.py b/zircolite/correlations.py
+index 250f026..7076adb 100644
+--- a/zircolite/correlations.py
++++ b/zircolite/correlations.py
+@@ -1,7 +1,7 @@
+ """Sigma correlation plans: what can run here, and how their alerts are reported.
+ 
+-A correlation rule converted by pySigma's SQLite backend (schema version 2)
+-carries a ``correlation_plan``: ordered SELECT stages that the backend's
++A correlation rule converted by pySigma's SQLite backend carries a
++``correlation_plan`` (version 2 or 3): ordered SELECT stages that the backend's
+ runtime materialises as indexed TEMP tables, a result query, and diagnostic
+ queries. Each result row is an alert summary -- a group, a window, a metric
+ and the events behind it -- not an event from ``logs``.
+@@ -12,7 +12,7 @@ import sqlite3
+ from datetime import datetime, timezone
+ from typing import Any
+ 
+-PLAN_VERSION = 2
++PLAN_VERSION = 3
+ 
+ # How a time field can be written, as the backend's timestamp_format names it:
+ # ISO 8601 text, or Unix seconds, milliseconds or microseconds.
+@@ -64,11 +64,13 @@ def plan_problem(plan: Any) -> str | None:
+     """Why this plan cannot run here, or None if it can."""
+     if not isinstance(plan, dict):
+         return "correlation_plan is not an object"
+-    if plan.get("version") != PLAN_VERSION:
++    if plan.get("version") not in (2, PLAN_VERSION):
+         return (
+             f"correlation plan version {plan.get('version')!r} is not supported "
+             f"(this Zircolite runs version {PLAN_VERSION})"
+         )
++    if plan["version"] == 3 and not plan.get("fulltext"):
++        return "version 3 correlation plan lacks fulltext requirements"
+     missing = [key for key in _PLAN_KEYS if key not in plan]
+     if missing:
+         return f"correlation plan lacks {', '.join(missing)}"
+diff --git a/zircolite/fulltext.py b/zircolite/fulltext.py
+new file mode 100644
+index 0000000..4339c8c
+--- /dev/null
++++ b/zircolite/fulltext.py
+@@ -0,0 +1,99 @@
++"""Private source-value search text and its SQLite provenance."""
++
++import sqlite3
++from typing import Any
++
++FIELD = "_sigma_fulltext"
++PROVENANCE = "_zircolite_fulltext"
++REPRESENTATION = "source-values-v1"
++
++
++def source_values(event: Any) -> str:
++    """Serialize decoded scalar leaves before metadata, mapping or flattening."""
++    values: list[str] = []
++
++    def walk(node: Any) -> None:
++        if isinstance(node, dict):
++            for key in sorted(node):
++                if isinstance(key, str) and key.lower() == FIELD:
++                    raise ValueError(f"Source field {key!r} uses reserved keyword-search name {FIELD}")
++                walk(node[key])
++        elif isinstance(node, (list, tuple)):
++            for item in node:
++                walk(item)
++        elif isinstance(node, str):
++            values.append(node)
++        elif isinstance(node, bool):
++            values.append("true" if node else "false")
++        elif node is not None and isinstance(node, (int, float)):
++            values.append(str(node))
++
++    walk(event)
++    return "\n".join(values)
++
++
++def _provenance_exists(connection: sqlite3.Connection) -> bool:
++    existing = connection.execute(
++        "SELECT type FROM sqlite_master WHERE lower(name)=lower(?)", (PROVENANCE,)
++    ).fetchone()
++    if existing is None:
++        return False
++    columns = connection.execute(f'PRAGMA table_info("{PROVENANCE}")').fetchall()
++    shape = [(row[1], row[2].upper(), row[5]) for row in columns]
++    if existing[0] != "table" or shape != [
++        ("source_table", "TEXT", 1), ("field", "TEXT", 0),
++        ("representation", "TEXT", 0),
++    ]:
++        raise ValueError("Existing _zircolite_fulltext table is unrelated to keyword search")
++    rows = connection.execute(
++        'SELECT source_table, field, representation FROM "_zircolite_fulltext"'
++    ).fetchall()
++    if rows != [("logs", FIELD, REPRESENTATION)]:
++        raise ValueError("Existing _zircolite_fulltext table is unrelated to keyword search")
++    return True
++
++
++def ensure_provenance(connection: sqlite3.Connection) -> None:
++    """Record the representation without adopting an unrelated private table."""
++    if not _provenance_exists(connection):
++        connection.execute(
++            f'CREATE TABLE "{PROVENANCE}" ('
++            'source_table TEXT PRIMARY KEY, field TEXT NOT NULL, representation TEXT NOT NULL)'
++        )
++        connection.execute(
++            'INSERT INTO "_zircolite_fulltext" VALUES (?, ?, ?)',
++            ("logs", FIELD, REPRESENTATION),
++        )
++
++
++def reset_provenance(connection: sqlite3.Connection) -> None:
++    """Drop only Zircolite's own provenance when resetting captured logs."""
++    if _provenance_exists(connection):
++        connection.execute('DROP TABLE "_zircolite_fulltext"')
++
++
++def require_provenance(connection: sqlite3.Connection, requirements: list[dict]) -> None:
++    """Reject old or foreign databases before a keyword rule runs."""
++    for item in requirements:
++        if item.get("table", "").strip('"').lower() != "logs" or item.get("field", "").lower() != FIELD:
++            raise ValueError("Keyword search source is unavailable; re-ingest events with Zircolite")
++    row = connection.execute(
++        "SELECT type FROM sqlite_master WHERE lower(name)=lower(?)", (PROVENANCE,)
++    ).fetchone()
++    if row is None or row[0] != "table":
++        raise ValueError("Keyword search text is unavailable; re-ingest events with Zircolite")
++    found = connection.execute(
++        'SELECT field, representation FROM "_zircolite_fulltext" WHERE source_table=?', ("logs",)
++    ).fetchone()
++    if found != (FIELD, REPRESENTATION):
++        raise ValueError("Keyword search provenance is unavailable; re-ingest events with Zircolite")
++
++
++def clean(value: Any) -> Any:
++    """Remove private search text from ordinary rows and nested evidence."""
++    if isinstance(value, dict):
++        return {key: clean(item) for key, item in value.items()
++                if not (isinstance(key, str) and key.lower() == FIELD)}
++    if isinstance(value, list):
++        return [clean(item) for item in value]
++    return value
+diff --git a/zircolite/processing.py b/zircolite/processing.py
+index 603e65a..0e886d6 100644
+--- a/zircolite/processing.py
++++ b/zircolite/processing.py
+@@ -142,6 +142,12 @@ class ProcessingContext:
+ # FACTORY HELPERS
+ # ============================================================================
+ 
++def _needs_fulltext(rulesets: list) -> bool:
++    return any(rule.get("fulltext") or
++               (isinstance(rule.get("correlation_plan"), dict) and rule["correlation_plan"].get("fulltext"))
++               for rule in rulesets)
++
++
+ def create_zircolite_core(
+     ctx: ProcessingContext,
+     db_location: str | None = None,
+@@ -176,6 +182,7 @@ def create_zircolite_core(
+         working_db_dir=ctx.working_db_dir,
+         sqlite_cache_mib=ctx.sqlite_cache_mib,
+         flatten_backend=ctx.flatten_backend,
++        fulltext_capture=_needs_fulltext(ctx.rulesets),
+         rule_prefilter=ctx.rule_prefilter,
+     )
+     return ZircoliteCore(ctx.config, proc_config, logger=ctx.logger)
+@@ -205,6 +212,7 @@ def create_worker_core(ctx: ProcessingContext, worker_id: int) -> ZircoliteCore:
+         working_db_dir=ctx.working_db_dir,
+         sqlite_cache_mib=ctx.sqlite_cache_mib,
+         flatten_backend=ctx.flatten_backend,
++        fulltext_capture=_needs_fulltext(ctx.rulesets),
+         rule_prefilter=ctx.rule_prefilter,
+     )
+     return ZircoliteCore(ctx.config, proc_config, logger=silent_logger)
+diff --git a/zircolite/rules.py b/zircolite/rules.py
+index 91286e6..4fbaf7a 100644
+--- a/zircolite/rules.py
++++ b/zircolite/rules.py
+@@ -49,10 +49,9 @@ from .correlations import is_correlation_plan_rule, plan_problem
+ from .sqlscan import channel_constraints, eventid_constraints
+ from .utils import random_suffix, safe_load_all
+ 
+-# Newest Zircolite ruleset format this version reads. Version 2 (pySigma's
+-# SQLite backend 2) adds required_fields, result_type and correlation plans;
+-# rulesets without a schema_version are version 1.
+-RULESET_SCHEMA_VERSION = 2
++# Version 2 adds required_fields, result_type and correlation plans; version 3
++# marks rules that need captured source-value text. Unversioned rules are v1.
++RULESET_SCHEMA_VERSION = 3
+ 
+ 
+ def _level_rank(rule: dict[str, Any]) -> int:
+@@ -88,7 +87,16 @@ def ruleset_format_problem(rules: list[dict[str, Any]]) -> str | None:
+                 f"rule {title!r} uses ruleset schema version {version}, and this "
+                 f"Zircolite reads up to version {RULESET_SCHEMA_VERSION}: update Zircolite"
+             )
++        fulltext = rule.get("fulltext")
++        if version == 3 and (not isinstance(fulltext, list) or not fulltext):
++            return f"rule {title!r} lacks fulltext requirements for schema version 3"
++        if version < 3 and fulltext:
++            return f"rule {title!r} has fulltext requirements but uses schema version {version}"
+         is_correlation = rule.get("correlation") or rule.get("result_type") == "correlation"
++        if version == 3 and is_correlation and is_correlation_plan_rule(rule):
++            plan = rule["correlation_plan"]
++            if not isinstance(plan, dict) or plan.get("version") != 3 or plan.get("fulltext") != fulltext:
++                return f"correlation rule {title!r} has inconsistent fulltext requirements"
+         if version >= 2 and is_correlation and not is_correlation_plan_rule(rule):
+             # Run as plain SQL, its alert rows would be reported as events.
+             return f"correlation rule {title!r} has no correlation_plan"
+@@ -972,6 +980,12 @@ class RulesetHandler:
+             merged["rule"] = [
+                 query for entry in converted for query in entry.get("rule", [])
+             ]
++            fulltext = {(item["table"], item["field"], item["representation"])
++                        for entry in converted for item in entry.get("fulltext", [])}
++            if fulltext:
++                merged["fulltext"] = [dict(table=table, field=name, representation=representation)
++                                      for table, name, representation in sorted(fulltext)]
++                merged["schema_version"] = 3
+             if any("required_fields" in entry for entry in converted):
+                 merged["required_fields"] = sorted({
+                     field for entry in converted for field in entry.get("required_fields", [])
+@@ -1025,10 +1039,18 @@ class RulesetHandler:
+                 pipeline.priority = orig
+         # row_id is the logs table's integer primary key: correlation evidence
+         # names events by it.
+-        backend = sqlite.sqliteBackend(
+-            combined_pipeline, timestamp_field=self.time_field, event_id_field="row_id",
+-            timestamp_format=self.timestamp_format,
+-        )
++        try:
++            backend = sqlite.sqliteBackend(
++                combined_pipeline, timestamp_field=self.time_field, event_id_field="row_id",
++                timestamp_format=self.timestamp_format, fulltext_field="_sigma_fulltext",
++            )
++        except TypeError as exc:
++            if "fulltext_field" not in str(exc):
++                raise
++            raise RuntimeError(
++                "This Zircolite requires the keyword-capable pySigma SQLite backend; "
++                "install the matching backend branch or wheel"
++            ) from exc
+         backend.init_processing_pipeline("zircolite")
+         return backend
+ 
+diff --git a/zircolite/streaming.py b/zircolite/streaming.py
+index ff6d676..d23ba78 100644
+--- a/zircolite/streaming.py
++++ b/zircolite/streaming.py
+@@ -49,6 +49,7 @@ from .formats import (
+     format_by_name,
+     format_from_args,
+ )
++from .fulltext import FIELD, ensure_provenance, source_values
+ from .jsonstream import iter_json_array
+ from .shutdown import is_shutdown_requested
+ from .sqlscan import lossless_table_schema
+@@ -659,6 +660,7 @@ class StreamingEventProcessor:
+         "field_split_list",
+         "field_types",
+         "flattening_info",
++        "fulltext_capture",
+         "hashes",
+         "logger",
+         # EVTX parsing strictness
+@@ -702,6 +704,7 @@ class StreamingEventProcessor:
+         self.config_file = config_file
+         self.time_field = proc.time_field
+         self.hashes = proc.hashes
++        self.fulltext_capture = proc.fulltext_capture
+         self.args_config = args_config
+         self.batch_size = proc.batch_size
+         kernel = select_flatten_kernel(proc.flatten_backend)
+@@ -790,6 +793,12 @@ class StreamingEventProcessor:
+ 
+         # Load field mappings config (includes event_filter and timestamp_detection)
+         self._load_config(_raw_config=_raw_config)
++        if self.fulltext_capture:
++            configured = [*self.field_mappings.values(), *self.aliases.values()]
++            configured += [spec.alias_name for specs in self._transforms_baked.values()
++                           for spec in specs if spec.alias_name]
++            if any(isinstance(name, str) and name.lower() == FIELD for name in configured):
++                raise ValueError(f"Mapping or alias uses reserved keyword-search name {FIELD}")
+ 
+         # Recompute after config load: event_filter.enabled can disable filtering
+         self._filtering_enabled = (
+@@ -1435,8 +1444,16 @@ class StreamingEventProcessor:
+             return param
+ 
+     def _flatten_event(self, event_dict: dict, filename: str, raw_bytes: bytes | None = None) -> dict | None:
++        text = source_values(event_dict) if self.fulltext_capture else None
+         _join_unnamed_event_data(event_dict)
+-        return self._flatten_impl(self, event_dict, filename, raw_bytes)
++        flat = self._flatten_impl(self, event_dict, filename, raw_bytes)
++        if flat is not None and text is not None:
++            if any(key.lower() == FIELD for key in flat):
++                raise ValueError(f"Flattened event uses reserved keyword-search name {FIELD}")
++            flat[FIELD] = text
++            self.discovered_fields[FIELD] = FIELD
++            self.field_types[FIELD] = "TEXT"
++        return flat
+ 
+     def stream_evtx_events(self, evtx_file: str) -> Generator[dict, None, None]:
+         """Stream and flatten events from an EVTX file (supports .evtx inside .gz/.bz2/.zip/.7z)."""
+@@ -1892,7 +1909,7 @@ class StreamingEventProcessor:
+                 # In parallel mode the shared handle's lock covers exactly one
+                 # write() call, so each event must be emitted in a single write.
+                 if keepflat_file is not None:
+-                    keepflat_file.write(json.dumps(event) + b"\n")
++                    keepflat_file.write(json.dumps({k: v for k, v in event.items() if k.lower() != FIELD}) + b"\n")
+ 
+                 if len(batch) >= batch_size:
+                     insert_batch(db_connection, cursor, batch)
+@@ -2151,6 +2168,8 @@ class StreamingEventProcessor:
+                     row_id INTEGER PRIMARY KEY AUTOINCREMENT
+                 )
+             """)
++            if self.fulltext_capture:
++                ensure_provenance(db_connection)
+             db_connection.commit()
+             # Refresh column cache from actual table state – handles both
+             # freshly created tables and reused tables (DELETE FROM path).
