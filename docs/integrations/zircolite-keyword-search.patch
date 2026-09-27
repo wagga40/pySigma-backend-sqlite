@@ -97,10 +97,10 @@ index 5139474..321b75d 100644
  
 diff --git a/tests/test_keyword_search.py b/tests/test_keyword_search.py
 new file mode 100644
-index 0000000..95b7fe2
+index 0000000..3f7dff0
 --- /dev/null
 +++ b/tests/test_keyword_search.py
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,354 @@
 +"""Execution contracts for keyword search over original event values."""
 +import io
 +import json
@@ -398,6 +398,63 @@ index 0000000..95b7fe2
 +        assert "_sigma_fulltext" in columns
 +    finally:
 +        core.close()
++
++
++@pytest.mark.parametrize("path", ["streaming", "direct"])
++def test_capture_cannot_stamp_preexisting_rows(path, field_mappings_file,
++                                                 default_args_config, test_logger):
++    core = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        core.create_db('"Message" TEXT, "_sigma_fulltext" TEXT')
++        assert core.insert_data_to_db({"Message": "old", "_sigma_fulltext": "Needle"})
++        if path == "streaming":
++            processor = StreamingEventProcessor(
++                field_mappings_file, default_args_config,
++                ProcessingConfig(fulltext_capture=True), logger=test_logger,
++            )
++            with pytest.raises(ValueError, match="re-ingest"):
++                processor.create_initial_table(core.db_connection)
++        else:
++            core.fulltext_capture = True
++            with pytest.raises(ValueError, match="re-ingest"):
++                core.insert_data_to_db({"Message": "new"})
++        assert core.db_connection.execute(
++            "SELECT name FROM sqlite_master WHERE name='_zircolite_fulltext'"
++        ).fetchone() is None
++        assert core.db_connection.execute("SELECT count(*) FROM logs").fetchone() == (1,)
++    finally:
++        core.close()
++
++
++def test_loaded_nullable_provenance_is_not_trusted(field_mappings_file, default_args_config, test_logger, tmp_path):
++    saved = tmp_path / "foreign.db"
++    source = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        source.create_db('"Message" TEXT, "_sigma_fulltext" TEXT')
++        assert source.insert_data_to_db({"Message": "old", "_sigma_fulltext": "Needle"})
++        source.db_connection.execute(
++            "CREATE TABLE _zircolite_fulltext ("
++            "source_table TEXT PRIMARY KEY, field TEXT, representation TEXT)"
++        )
++        source.db_connection.execute(
++            "INSERT INTO _zircolite_fulltext VALUES ('logs', '_sigma_fulltext', 'source-values-v1')"
++        )
++        processor = StreamingEventProcessor(
++            field_mappings_file, default_args_config,
++            ProcessingConfig(fulltext_capture=True), logger=test_logger,
++        )
++        with pytest.raises(ValueError, match="unrelated"):
++            processor.create_initial_table(source.db_connection)
++        source.save_db_to_disk(str(saved))
++    finally:
++        source.close()
++    loaded = ZircoliteCore(field_mappings_file, logger=test_logger)
++    try:
++        loaded.load_db_in_memory(str(saved))
++        assert loaded.execute_rule(_rule("SELECT * FROM logs WHERE _sigma_fulltext LIKE '%Needle%'")) == {}
++        assert "provenance" in loaded.rules_in_error["keyword"].lower() or "re-ingest" in loaded.rules_in_error["keyword"].lower()
++    finally:
++        loaded.close()
 diff --git a/zircolite/config.py b/zircolite/config.py
 index a98a41d..9676034 100644
 --- a/zircolite/config.py
@@ -666,10 +723,10 @@ index 250f026..7076adb 100644
          return f"correlation plan lacks {', '.join(missing)}"
 diff --git a/zircolite/fulltext.py b/zircolite/fulltext.py
 new file mode 100644
-index 0000000..4339c8c
+index 0000000..73d9787
 --- /dev/null
 +++ b/zircolite/fulltext.py
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,94 @@
 +"""Private source-value search text and its SQLite provenance."""
 +
 +import sqlite3
@@ -711,23 +768,26 @@ index 0000000..4339c8c
 +    if existing is None:
 +        return False
 +    columns = connection.execute(f'PRAGMA table_info("{PROVENANCE}")').fetchall()
-+    shape = [(row[1], row[2].upper(), row[5]) for row in columns]
++    shape = [(row[1], row[2].upper(), row[3], row[4], row[5]) for row in columns]
 +    if existing[0] != "table" or shape != [
-+        ("source_table", "TEXT", 1), ("field", "TEXT", 0),
-+        ("representation", "TEXT", 0),
++        ("source_table", "TEXT", 0, None, 1),
++        ("field", "TEXT", 1, None, 0),
++        ("representation", "TEXT", 1, None, 0),
 +    ]:
-+        raise ValueError("Existing _zircolite_fulltext table is unrelated to keyword search")
++        raise ValueError("Keyword search provenance table is unrelated; re-ingest events")
 +    rows = connection.execute(
 +        'SELECT source_table, field, representation FROM "_zircolite_fulltext"'
 +    ).fetchall()
 +    if rows != [("logs", FIELD, REPRESENTATION)]:
-+        raise ValueError("Existing _zircolite_fulltext table is unrelated to keyword search")
++        raise ValueError("Keyword search provenance table is unrelated; re-ingest events")
 +    return True
 +
 +
 +def ensure_provenance(connection: sqlite3.Connection) -> None:
 +    """Record the representation without adopting an unrelated private table."""
 +    if not _provenance_exists(connection):
++        if connection.execute("SELECT 1 FROM logs LIMIT 1").fetchone() is not None:
++            raise ValueError("Existing logs lack keyword search provenance; re-ingest events")
 +        connection.execute(
 +            f'CREATE TABLE "{PROVENANCE}" ('
 +            'source_table TEXT PRIMARY KEY, field TEXT NOT NULL, representation TEXT NOT NULL)'
@@ -749,15 +809,7 @@ index 0000000..4339c8c
 +    for item in requirements:
 +        if item.get("table", "").strip('"').lower() != "logs" or item.get("field", "").lower() != FIELD:
 +            raise ValueError("Keyword search source is unavailable; re-ingest events with Zircolite")
-+    row = connection.execute(
-+        "SELECT type FROM sqlite_master WHERE lower(name)=lower(?)", (PROVENANCE,)
-+    ).fetchone()
-+    if row is None or row[0] != "table":
-+        raise ValueError("Keyword search text is unavailable; re-ingest events with Zircolite")
-+    found = connection.execute(
-+        'SELECT field, representation FROM "_zircolite_fulltext" WHERE source_table=?', ("logs",)
-+    ).fetchone()
-+    if found != (FIELD, REPRESENTATION):
++    if not _provenance_exists(connection):
 +        raise ValueError("Keyword search provenance is unavailable; re-ingest events with Zircolite")
 +
 +

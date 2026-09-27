@@ -2,8 +2,8 @@
 
 The [companion patch](zircolite-keyword-search.patch) adds keyword capture and
 execution to Zircolite. It is based on Zircolite commit `f384318` and accompanies
-this backend's `feat/sigma-keyword-search` branch. The initial consumer commit is
-`b39a2b7de96ac0d3cde7b47d28058aa7717644c9`. Apply it to a clean checkout
+this backend's `feat/sigma-keyword-search` branch. The consumer commit is
+`6448516bc48665ba7e70002f3a7fdf5a3ad0da71`. Apply it to a clean checkout
 based on that commit; a checkout with later or local changes may need conflict
 resolution.
 
@@ -72,15 +72,15 @@ reports KiB instead, so multiply that field by 1,024 to compare byte values.
 
 - Backend: 203 tests passed, including execution with the SQLite 3.38.0 CLI;
   wheel and source distribution builds passed.
-- Consumer: 20 feature tests passed, including Python/Cython flattening and
+- Consumer: 23 feature tests passed, including Python/Cython flattening and
   sequential, unified, thread and process execution. The final focused core,
-  correlation and keyword suites passed all 182 tests.
+  correlation and keyword suites passed all 185 tests.
 - The consumer full suite recorded 2,519 passed, 44 skipped and two failures.
   Both failures reproduced before this change:
   `tests/test_tools.py::TestSigmaRegressionUntrustedText::test_failed_rule_title_with_markup`
   and `test_missing_data_file_path_with_markup`. Their captured console text
-  wraps differently from the literal-string assertions. The last two narrow
-  collision-handling fixes were checked by the focused suites above.
+  wraps differently from the literal-string assertions. Subsequent
+  collision and provenance fixes were checked by the focused suites above.
 - Consumer Ruff and mypy passed. The companion patch passed `git apply --check`
   against a clean archive of `f384318`.
 - A real Sigma Linux rule passed ingestion, detection, saved-database reload
