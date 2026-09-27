@@ -97,10 +97,10 @@ index 5139474..321b75d 100644
  
 diff --git a/tests/test_keyword_search.py b/tests/test_keyword_search.py
 new file mode 100644
-index 0000000..3f7dff0
+index 0000000..70128b1
 --- /dev/null
 +++ b/tests/test_keyword_search.py
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,385 @@
 +"""Execution contracts for keyword search over original event values."""
 +import io
 +import json
@@ -265,7 +265,27 @@ index 0000000..3f7dff0
 +             "EventID": 1, "Image": "cmd.exe", "Message": "Needle"}
 +            for i in range(2)
 +        ])
++        traced = []
++        core.db_connection.set_trace_callback(traced.append)
++
++        def coverage_count():
++            return sum(statement.lower().startswith("select 1 from logs where")
++                       and "typeof(" in statement.lower() and "_sigma_fulltext" in statement.lower()
++                       for statement in traced)
++
 +        alert = core.execute_rule(rule)["matches"][0]
++        assert coverage_count() == 1
++        traced.clear()
++        assert core.execute_rule(rule)["count"] == 1
++        assert coverage_count() == 0
++        assert core.insert_data_to_db({
++            "SystemTime": "2026-01-01T00:00:02Z", "Channel": "Microsoft-Windows-Sysmon/Operational",
++            "EventID": 1, "Image": "cmd.exe", "Message": "Needle",
++        })
++        traced.clear()
++        assert core.execute_rule(rule)["count"] >= 1
++        assert coverage_count() == 1
++        core.db_connection.set_trace_callback(None)
 +        assert "_sigma_fulltext" not in alert["evidence"][0]["event"]
 +        old_plan = dict(rule["correlation_plan"], version=2)
 +        old_plan.pop("fulltext")
@@ -455,6 +475,17 @@ index 0000000..3f7dff0
 +        assert "provenance" in loaded.rules_in_error["keyword"].lower() or "re-ingest" in loaded.rules_in_error["keyword"].lower()
 +    finally:
 +        loaded.close()
++
++
++def test_captured_insert_before_table_creation_returns_false(field_mappings_file, test_logger):
++    core = ZircoliteCore(field_mappings_file, ProcessingConfig(fulltext_capture=True), logger=test_logger)
++    try:
++        assert core.insert_data_to_db({"Message": "x"}) is False
++        assert core.db_connection.execute(
++            "SELECT name FROM sqlite_master WHERE name='_zircolite_fulltext'"
++        ).fetchone() is None
++    finally:
++        core.close()
 diff --git a/zircolite/config.py b/zircolite/config.py
 index a98a41d..9676034 100644
 --- a/zircolite/config.py
@@ -468,7 +499,7 @@ index a98a41d..9676034 100644
  
      # Output options
 diff --git a/zircolite/core.py b/zircolite/core.py
-index d16fb55..00b0507 100644
+index d16fb55..56a859c 100644
 --- a/zircolite/core.py
 +++ b/zircolite/core.py
 @@ -55,6 +55,14 @@ from .correlations import (
@@ -569,18 +600,26 @@ index d16fb55..00b0507 100644
  
      def escape_identifier(self, identifier: str) -> str:
          """Escape SQL identifiers like table or column names with caching."""
-@@ -901,6 +924,10 @@ class ZircoliteCore:
+@@ -901,8 +924,18 @@ class ZircoliteCore:
          if conn is None:
              return False
  
 +        if self.fulltext_capture:
 +            batch = [dict(row, **{FIELD: source_values(row)}) for row in batch]
-+            ensure_provenance(conn)
++            try:
++                ensure_provenance(conn)
++            except sqlite3.Error as exc:
++                self.logger.debug(f"    [-] {exc}")
++                return False
 +
++        transaction_started = False
          try:
              conn.execute('BEGIN TRANSACTION')
++            transaction_started = True
  
-@@ -937,6 +964,8 @@ class ZircoliteCore:
+             # Group rows by their column signatures
+             batches_by_columns: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+@@ -937,9 +970,12 @@ class ZircoliteCore:
                  conn.executemany(insert_stmt, values_list)
  
              conn.execute('COMMIT')
@@ -588,8 +627,13 @@ index d16fb55..00b0507 100644
 +            self._fulltext_validated.clear()
              return True
          except Exception as e:
-             conn.execute('ROLLBACK')
-@@ -961,6 +990,20 @@ class ZircoliteCore:
+-            conn.execute('ROLLBACK')
++            if transaction_started:
++                conn.execute('ROLLBACK')
+             self.logger.debug(f"    [-] {e}")
+             return False
+ 
+@@ -961,6 +997,20 @@ class ZircoliteCore:
          finally:
              on_disk_db.close()
  
@@ -610,7 +654,7 @@ index d16fb55..00b0507 100644
      def execute_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
          return self._execute_rule(rule)
  
-@@ -981,6 +1024,12 @@ class ZircoliteCore:
+@@ -981,6 +1031,12 @@ class ZircoliteCore:
          filtered_rows: RowSpool | list[dict[str, Any]] = RowSpool() if stream_rows else []
          rule_title = rule.get("title", "Unnamed Rule")
          required = [field for field in rule.get("required_fields") or () if isinstance(field, str)]
@@ -623,20 +667,19 @@ index d16fb55..00b0507 100644
          try:
              for sql_query in sigma_queries:
                  checkpoint = filtered_rows.checkpoint() if isinstance(filtered_rows, RowSpool) else len(filtered_rows)
-@@ -1048,6 +1097,12 @@ class ZircoliteCore:
- 
-         # A dense window can keep one statement busy for minutes; the handler
+@@ -1050,8 +1106,10 @@ class ZircoliteCore:
          # lets Ctrl+C stop it instead of waiting for the next rule.
-+        if plan.get("version") == 3:
-+            try:
-+                self._validate_fulltext(plan.get("fulltext"))
-+            except (ValueError, sqlite3.Error) as exc:
-+                self._note_broken_rule(title, exc)
-+                return {}
          conn.set_progress_handler(is_shutdown_requested, 10_000)
          try:
++            preflight = {"fulltext_preflight": self._validate_fulltext} if plan.get("version") == 3 else {}
              rows, diagnostics = execute_plan(
-@@ -1076,7 +1131,8 @@ class ZircoliteCore:
+-                conn, plan, limit=None if self.limit == -1 else self.limit, include_events=True
++                conn, plan, limit=None if self.limit == -1 else self.limit,
++                include_events=True, **preflight,
+             )
+         except sqlite3.Error as exc:
+             if not is_shutdown_requested():
+@@ -1076,7 +1134,8 @@ class ZircoliteCore:
          matches: RowSpool | list[dict[str, Any]] = RowSpool() if stream_rows else []
          try:
              for alert in alerts:
@@ -646,7 +689,7 @@ index d16fb55..00b0507 100644
          except BaseException:
              if isinstance(matches, RowSpool):
                  matches.close()
-@@ -1119,6 +1175,8 @@ class ZircoliteCore:
+@@ -1119,6 +1178,8 @@ class ZircoliteCore:
              self.ruleset = [rule for rule in self.ruleset if not any(rule_filter in rule.get("title", "") for rule_filter in rule_filters)]
          self._prepared = prepare_rules(rule_queries(self.ruleset))
          self._has_correlation_plans = any(is_correlation_plan_rule(rule) for rule in self.ruleset)
@@ -655,7 +698,7 @@ index d16fb55..00b0507 100644
  
      @timed_stage("output")
      def _write_result_to_output(
-@@ -1214,7 +1272,7 @@ class ZircoliteCore:
+@@ -1214,7 +1275,7 @@ class ZircoliteCore:
          except sqlite3.Error as exc:
              self.logger.debug(f"Could not read the logs schema for the CSV header: {exc}")
              columns = []
@@ -664,7 +707,7 @@ index d16fb55..00b0507 100644
          if columns:
              return columns
          return list(rule_results["matches"][0].keys())
-@@ -1735,6 +1793,7 @@ class ZircoliteCore:
+@@ -1735,6 +1796,7 @@ class ZircoliteCore:
              batch_size=self.batch_size,
              evtx_threads=self.evtx_threads,
              flatten_backend=self.flatten_backend,
@@ -672,7 +715,7 @@ index d16fb55..00b0507 100644
          )
          processor = StreamingEventProcessor(
              config_file=self.config,
-@@ -1751,6 +1810,10 @@ class ZircoliteCore:
+@@ -1751,6 +1813,10 @@ class ZircoliteCore:
              + (f" ({processor.flattening_info['reason']})" if processor.flattening_info.get("reason") else "")
          )
  
