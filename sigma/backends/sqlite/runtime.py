@@ -1,4 +1,4 @@
-"""Execute a version-2 correlation plan on a consumer-owned SQLite connection."""
+"""Execute correlation plans on a consumer-owned SQLite connection."""
 
 from __future__ import annotations
 
@@ -7,6 +7,57 @@ import re
 import sqlite3
 
 from .correlation import quote
+
+
+_TABLE_NAME = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`)(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`))*\Z"
+)
+
+
+def validate_fulltext(connection, requirements):
+    """Require a populated source-values-v1 TEXT column for every source row."""
+    if not isinstance(requirements, list) or not requirements:
+        raise ValueError("Keyword search requires nonempty fulltext requirements")
+    for item in requirements:
+        if not isinstance(item, dict) or set(item) != {
+            "table",
+            "field",
+            "representation",
+        }:
+            raise ValueError(
+                "Invalid fulltext requirement; re-ingest events for keyword search"
+            )
+        table, field = item["table"], item["field"]
+        if (
+            not isinstance(table, str)
+            or not _TABLE_NAME.fullmatch(table)
+            or not isinstance(field, str)
+            or not field
+            or item["representation"] != "source-values-v1"
+        ):
+            raise ValueError(
+                "Invalid fulltext requirement; re-ingest events for keyword search"
+            )
+        try:
+            cursor = connection.execute(f"SELECT * FROM {table} LIMIT 0")
+            existing = {column[0].lower() for column in cursor.description}
+            cursor.close()
+            if field.lower() not in existing:
+                raise ValueError(
+                    f"Keyword text column {field!r} is missing from {table}; re-ingest events"
+                )
+            missing = connection.execute(
+                f"SELECT 1 FROM {table} WHERE {quote(field)} IS NULL "
+                f"OR typeof({quote(field)}) != 'text' LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error as error:
+            raise ValueError(
+                f"Keyword text is unavailable in {table}; re-ingest events"
+            ) from error
+        if missing:
+            raise ValueError(
+                f"Keyword text in {table}.{field} is incomplete; re-ingest events"
+            )
 
 
 def ensure_fields(connection, requirements):
@@ -30,8 +81,10 @@ def execute_plan(connection, plan, *, limit=None, include_events=True):
     discard-noisy-rule policy. The executor never commits the caller's work.
     Event IDs are scoped by source table; source filenames accompany evidence.
     """
-    if plan.get("version") != 2:
+    if plan.get("version") not in (2, 3):
         raise ValueError("Unsupported correlation plan version")
+    if plan["version"] == 3:
+        validate_fulltext(connection, plan.get("fulltext"))
     if sqlite3.sqlite_version_info < (3, 38, 0):
         raise RuntimeError(
             "Correlation plans require SQLite >= 3.38 with JSON functions"
@@ -72,6 +125,9 @@ def execute_plan(connection, plan, *, limit=None, include_events=True):
             for field in ("group_keys", "event_ids", "child_alert_ids"):
                 row[field] = json.loads(row[field])
         if include_events:
+            internal_fields = {
+                item["field"].lower() for item in plan.get("fulltext", [])
+            }
             evidence = {}
             ids_by_table = {}
             for row in rows:
@@ -96,7 +152,9 @@ def execute_plan(connection, plan, *, limit=None, include_events=True):
                         "event_id": identity,
                         "source_table": table,
                         "event": {
-                            k: v for k, v in zip(columns, event[1:]) if v is not None
+                            k: v
+                            for k, v in zip(columns, event[1:])
+                            if v is not None and k.lower() not in internal_fields
                         },
                     }
                 cursor.close()

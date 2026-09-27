@@ -351,10 +351,8 @@ def test_sqlite_fts_keywords_str(sqlite_backend: sqliteBackend):
         """
             )
         )
-    assert (
-        str(e.value)
-        == "Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
-    )
+    assert "fulltext_field" in str(e.value)
+    assert "re-ingest" in str(e.value)
 
 
 def test_sqlite_fts_keywords_num(sqlite_backend: sqliteBackend):
@@ -375,10 +373,8 @@ def test_sqlite_fts_keywords_num(sqlite_backend: sqliteBackend):
         """
             )
         )
-    assert (
-        str(e.value)
-        == "Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
-    )
+    assert "fulltext_field" in str(e.value)
+    assert "re-ingest" in str(e.value)
 
 
 def test_sqlite_value_case_sensitive_contains(sqlite_backend: sqliteBackend):

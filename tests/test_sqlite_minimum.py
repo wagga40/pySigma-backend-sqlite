@@ -79,3 +79,53 @@ def test_minimum_sqlite_executes_correlations(kind, materialized):
     assert [json.loads(r["event_ids"]) for r in rows] == [
         r["event_ids"] for r in expected
     ]
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+def test_minimum_sqlite_executes_keyword_correlation(materialized):
+    docs = [
+        {
+            "title": "keyword",
+            "name": "keyword",
+            "logsource": {"category": "test"},
+            "detection": {"selection": ["needle"], "condition": "selection"},
+        },
+        {
+            "title": "burst",
+            "name": "burst",
+            "correlation": {
+                "type": "event_count",
+                "rules": ["keyword"],
+                "timespan": "5s",
+                "group-by": ["Host"],
+                "condition": {"gte": 1},
+            },
+        },
+    ]
+    entry = json.loads(
+        sqliteBackend(fulltext_field="_sigma_fulltext").convert(
+            SigmaCollection.from_yaml(yaml.safe_dump_all(docs)), "zircolite"
+        )
+    )[-1]
+    plan = entry["correlation_plan"]
+    assert plan["version"] == 3
+    script = (
+        "CREATE TABLE logs (timestamp TEXT, Host TEXT, _sigma_fulltext TEXT);\n"
+        "INSERT INTO logs VALUES ('2024-01-01T00:00:00', 'h', 'a needle b');\n"
+    )
+    if materialized:
+        for stage in plan["prepare"]:
+            script += f'CREATE TEMP TABLE {stage["name"]} AS {stage["select"]};\n'
+            for i, columns in enumerate(stage["indexes"]):
+                script += f'CREATE INDEX {stage["name"]}_i{i} ON {stage["name"]} ({",".join(columns)});\n'
+        script += plan["query"] + ";"
+    else:
+        script += entry["rule"][0] + ";"
+    result = subprocess.run(
+        [sqlite_cli, "-json", ":memory:"],
+        input=script,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout)[0]["metric_value"] == 1
