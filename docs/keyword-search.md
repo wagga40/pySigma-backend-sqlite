@@ -29,8 +29,20 @@ prerequisite metadata, even when Zircolite itself is not used. After ingesting
 source text, call `validate_fulltext(connection, entry["fulltext"])` for each
 dependent ordinary rule before provisioning other absent columns or running SQL.
 `execute_plan` performs this check itself for version-3 correlation plans.
-The helper verifies TEXT coverage; the caller remains responsible for the
-meaning of the supplied values.
+A caller that caches successful checks per content revision may pass
+`fulltext_preflight=requirements_callback` to `execute_plan`; that callback
+must validate the supplied requirements before the plan can widen the schema.
+Without the callback, `execute_plan` validates on every invocation. The helper
+verifies TEXT coverage; the caller remains responsible for the meaning of the
+supplied values.
+
+Generated ordinary rule SQL uses `SELECT *`. Generic consumers must remove
+`fulltext_field` from returned rows before displaying or exporting matches.
+They must also remove it from evidence returned by keyword-independent
+version-2 correlation plans on a captured database: those plans have no
+`fulltext` metadata from which the runtime can identify the private column.
+This is especially relevant when captured values include fields that normal
+flattening would exclude. Zircolite performs this filtering for both cases.
 
 The [companion Zircolite change](integrations/zircolite-keyword-search.md)
 enables capture automatically when loaded rules require it, including correlation
@@ -42,8 +54,8 @@ re-ingestion is required.
 
 Capture duplicates source values in the SQLite database, including values that
 flattening would discard. Database size and ingestion memory therefore increase.
-Keep this in mind when sharing captured databases. Normal results and flattened
-exports omit this internal column. Substring predicates scan eligible rows;
+Keep this in mind when sharing captured databases. Zircolite's normal results
+and flattened exports omit this internal column. Substring predicates scan eligible rows;
 ordinary B-tree indexes on the text do not accelerate leading-wildcard searches.
 FTS5 indexing and the unrelated compatibility gaps below remain future work.
 

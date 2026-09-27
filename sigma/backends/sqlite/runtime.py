@@ -74,17 +74,25 @@ def ensure_fields(connection, requirements):
                 existing.add(field.lower())
 
 
-def execute_plan(connection, plan, *, limit=None, include_events=True):
+def execute_plan(
+    connection, plan, *, limit=None, include_events=True, fulltext_preflight=None
+):
     """Return (alert summaries, diagnostic counts), cleaning temporary relations.
 
     A limit truncates retrieval at limit+1 so the consumer can retain its
     discard-noisy-rule policy. The executor never commits the caller's work.
     Event IDs are scoped by source table; source filenames accompany evidence.
+    A caller may supply a cache-aware fulltext_preflight(requirements) hook;
+    without one, version-3 plans validate on every execution.
     """
     if plan.get("version") not in (2, 3):
         raise ValueError("Unsupported correlation plan version")
     if plan["version"] == 3:
-        validate_fulltext(connection, plan.get("fulltext"))
+        requirements = plan.get("fulltext")
+        if fulltext_preflight is None:
+            validate_fulltext(connection, requirements)
+        else:
+            fulltext_preflight(requirements)
     if sqlite3.sqlite_version_info < (3, 38, 0):
         raise RuntimeError(
             "Correlation plans require SQLite >= 3.38 with JSON functions"

@@ -311,3 +311,73 @@ def test_multi_source_chained_correlation_inherits_keyword_table():
         "`first logs`",
         "`second logs`",
     }
+
+
+def test_correlation_preflight_hook_keeps_default_validation():
+    corr = {
+        "title": "burst",
+        "name": "burst",
+        "correlation": {
+            "type": "event_count",
+            "rules": ["search"],
+            "timespan": "5s",
+            "group-by": ["Host"],
+            "condition": {"gte": 2},
+        },
+    }
+    plan = json.loads(convert([detection(["needle"]), corr]))[0]["correlation_plan"]
+    with database(["needle", "needle"]) as connection:
+        traced = []
+        connection.set_trace_callback(traced.append)
+
+        def coverage_count():
+            return sum(
+                statement.lower().startswith("select 1 from logs where")
+                and "typeof(" in statement.lower()
+                and "_sigma_fulltext" in statement.lower()
+                for statement in traced
+            )
+
+        assert len(runtime.execute_plan(connection, plan)[0]) == 1
+        assert coverage_count() == 1
+        traced.clear()
+        assert len(runtime.execute_plan(connection, plan)[0]) == 1
+        assert coverage_count() == 1
+
+        checked = False
+        calls = []
+
+        def cached_preflight(requirements):
+            nonlocal checked
+            calls.append(requirements)
+            if not checked:
+                runtime.validate_fulltext(connection, requirements)
+                checked = True
+
+        traced.clear()
+        assert (
+            len(
+                runtime.execute_plan(
+                    connection, plan, fulltext_preflight=cached_preflight
+                )[0]
+            )
+            == 1
+        )
+        assert coverage_count() == 1
+        traced.clear()
+        assert (
+            len(
+                runtime.execute_plan(
+                    connection, plan, fulltext_preflight=cached_preflight
+                )[0]
+            )
+            == 1
+        )
+        assert coverage_count() == 0
+        assert calls == [plan["fulltext"], plan["fulltext"]]
+
+        connection.execute("UPDATE logs SET _sigma_fulltext=NULL")
+        traced.clear()
+        with pytest.raises(ValueError, match="re-ingest"):
+            runtime.execute_plan(connection, plan)
+        assert coverage_count() == 1
