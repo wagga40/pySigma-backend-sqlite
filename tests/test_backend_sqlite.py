@@ -203,12 +203,12 @@ def test_sqlite_cidr_query(sqlite_backend: sqliteBackend):
 
 
 def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBackend):
-    # pySigma 1.5.0 expanded this to field='2001:db8::', which matches no host in
-    # the network: its compressed broadcast address merely extends the network's.
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    # pySigma 2 matches the zero groups both spelled out and compressed to "::".
+    import sqlite3
+
+    query = sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -219,10 +219,22 @@ def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBac
                     field|cidr: 2001:db8::/64
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE field LIKE '2001:db8::%' ESCAPE '\\'"]
+    )[0]
+    assert query == (
+        "SELECT * FROM logs WHERE field LIKE '2001:db8:0:0:%' ESCAPE '\\' "
+        "OR field LIKE '2001:db8::%' ESCAPE '\\'"
     )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE logs (field TEXT)")
+    connection.executemany(
+        "INSERT INTO logs VALUES (?)",
+        [("2001:db8::1",), ("2001:db8:0:0:1::1",), ("2001:db8:0:1::1",), ("2001:db9::1",)],
+    )
+    assert {row[0] for row in connection.execute(query)} == {
+        "2001:db8::1",
+        "2001:db8:0:0:1::1",
+    }
 
 
 def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):

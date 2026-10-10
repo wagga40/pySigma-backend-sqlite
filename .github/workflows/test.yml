@@ -1,9 +1,9 @@
 name: Test
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "*" ]
+    branches: [ "**" ]
   workflow_dispatch:
 
 jobs:
@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: [ 'ubuntu-latest' ]
-        python-version: [ '3.10', '3.11', '3.12', '3.13', '3.14' ]
+        python-version: [ '3.11', '3.12', '3.13', '3.14' ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: poetry install
       - name: Build minimum supported SQLite
-        if: matrix.python-version == '3.10'
+        if: matrix.python-version == '3.11'
         run: |
           curl --fail --location https://www.sqlite.org/2022/sqlite-amalgamation-3380000.zip --output /tmp/sqlite-min.zip
           unzip -q /tmp/sqlite-min.zip -d /tmp
@@ -62,7 +62,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: pip install . pysigma-pipeline-sysmon==2.0.0 pysigma-pipeline-windows==2.0.0
+      - run: pip install .
+      # These pipeline releases still declare pysigma<2 but work unchanged on pySigma 2.
+      - run: pip install --no-deps pysigma-pipeline-sysmon==2.0.0 pysigma-pipeline-windows==2.0.0
       - run: python tools/audit_corpus.py .corpus --profile ${{ matrix.profile }} --output corpus-${{ matrix.profile }}.json
       - uses: actions/upload-artifact@v4
         if: always()
