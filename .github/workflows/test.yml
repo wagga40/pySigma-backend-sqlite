@@ -37,7 +37,8 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: poetry run python print-coverage.py >> $GITHUB_ENV
       - name: Create coverage badge
-        if: ${{ github.repository == 'wagga40/pySigma-backend-sqlite' && github.event_name == 'push' && runner.os == 'Linux' }}
+        # One job only: concurrent gist updates fail with 409 Conflict.
+        if: ${{ github.repository == 'wagga40/pySigma-backend-sqlite' && github.event_name == 'push' && runner.os == 'Linux' && matrix.python-version == '3.14' }}
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
