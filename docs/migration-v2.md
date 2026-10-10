@@ -1,80 +1,50 @@
-# Migrating to SQLite backend 2.0
+# Migrating to backend 2.x
 
-Version 2 changes correlation semantics and the result contract. Regenerate
-saved SQL/rulesets; upgrading the Python package does not repair previously
-generated SQL. Update a consumer that executes correlation output before
-distributing version-2 rulesets to it.
+Regenerate saved SQL and rulesets after upgrading; the package does not rewrite
+SQL produced by an older version. Update any consumer that runs correlation
+output before giving it 2.x rulesets.
 
-## Dependencies and configuration
+## From 1.x to 2.0
 
-- pySigma >=1.5.1,<2 (1.5.0 mis-expands some IPv6 CIDR prefixes); Python >=3.10; SQLite >=3.38 with JSON for correlations.
-- The default table is now `logs` in both formats. Supply `table=` for another
-  table. Identifiers and pipeline-selected table names are quoted correctly.
-- Constructor options now work. Existing callers that set attributes continue
-  to work. `collate_nocase=True` is recommended for ordinary string equality on
-  schemas that do not declare NOCASE columns. SQLite's case folding is ASCII.
-- Point `timestamp_field` and `event_id_field` at the consumer's schema
-  (defaults `timestamp` and `rowid`).
-  For numeric input use `timestamp_format="unix"`, `"unix_ms"`, or `"unix_us"`;
-  malformed numeric values are excluded.
-  Custom SQL expressions remain available for other representations.
-- Correlation timestamps use milliseconds with the default ISO expression.
-  Equal timestamps do not establish ordered stages. Use normalized numeric
-  timestamps when finer precision is available and matters to the rule.
+**Configuration**
 
-## Changed results
+- Requires pySigma >=1.5.1,<2 and Python 3.10+ (2.1 raises both, see below).
+  Correlations need SQLite 3.38+ with JSON functions.
+- The default table is `logs` in both output formats.
+- Options are constructor keywords (see the README's Options). Point
+  `timestamp_field` and `event_id_field` at your schema.
+- On tables without `NOCASE` columns, set `collate_nocase=True` so string
+  equality ignores case.
 
-Previously a grouped correlation returned one row such as `{"Host":"h"}` for
-the entire search, hiding separate bursts. It now returns each qualifying
-occurrence's group object, window, aggregate, and evidence references.
+**Correlation results**
 
-`metric_value` is the rule's count/statistic. `event_count` counts supporting
-physical records. String grouping values are normalized to lowercase with
-SQLite's ASCII folding, while evidence preserves original spelling. Group names live inside
-`group_keys`, avoiding collisions with event fields or aggregate names.
+- A grouped correlation used to return one row per group for the whole input,
+  such as `{"Host": "h"}`, hiding separate bursts. Each qualifying occurrence is
+  now a row with its window, metric and evidence ([output format](output-format.md)).
+- `metric_value` is the count or statistic; `event_count` counts supporting events.
+- Counts and statistics look backward from each event; absence looks forward.
+  With values 0 at t=0 and 100 at t=3, the average at t=3 is now 50, not 100.
+  See [correlations](correlations.md).
+- String group keys are lowercased and nested in `group_keys`.
+- `generate: true` used to expose raw predicates; it now emits valid standalone
+  queries.
 
-Counts and statistics now look backward. For values 0 at t=0 and 100 at t=3,
-the average at t=3 is 50, not the isolated future-facing value 100. Absence
-conditions look forward and emit at the timeout. By default no absence alert
-is emitted beyond the last valid input timestamp; supply an explicit analysis
-horizon when the available observation period extends further.
+**Consumers**
 
-Aliases and chains are compiled from resolved rule structures. A child alert
-has an occurrence time and evidence that later stages can consume. Aggregate
-references may read a child's type-named metric, for example `event_count`.
-Other parent fields come from child evidence; projections are deduplicated by
-child occurrence and parent group/value. Report values deliberately when a
-child spans several users or other grouping identities.
+- Add missing columns from `required_fields` (or `runtime.ensure_fields`) rather
+  than by scanning SQL text, which misses fields inside functions and CTEs.
+- Run `correlation_plan` with `runtime.execute_plan` for indexed execution and
+  event evidence. `rule` still holds standalone `SELECT` statements.
+- Don't skip a rule because its `channel` list is empty.
 
-The old `generate: true` behavior could expose raw predicates. Version 2 emits
-valid standalone queries while retaining the predicates internally. Only final
-requested correlations are emitted; reference-only children are compiled.
+## From 2.0 to 2.1
 
-## Consumer integration
-
-Use `required_fields` to provision absent columns as NULL. The old SQL scanner
-cannot reliably discover fields inside functions or CTE/window queries.
-Search-text columns declared by `fulltext` are an exception: validate them
-before widening and never synthesize them as NULL.
-Use `correlation_plan` with `sigma.backends.sqlite.runtime.execute_plan` for
-indexed execution and full event evidence. The `rule` list remains available
-for consumers that execute standalone SELECT statements.
-
-Load related YAML files into one collection. For multi-file event input use a
-unified database; per-file databases cannot produce cross-file correlations.
-Do not exclude a rule merely because its Channel allow-list is empty.
-
-## Coverage and operations
-
-Keyword/fieldless detections require the optional `fulltext_field` setting and
-consumer-provided text. They use schema/plan version 3; see
-[keyword search](keyword-search.md) before distributing these rulesets.
-Existing version-2 output for other rules is unchanged. IPv6 CIDR spelling,
-Python REGEXP compatibility and SQLite's ASCII case folding remain limitations.
-Run `tools/audit_corpus.py` against a pinned Sigma checkout; conversion and SQL
-preparation counts are not evidence of detection accuracy.
-
-Run `tools/benchmark_correlations.py` on representative sparse and dense input.
-Evidence for every qualifying window can itself be very large. Result limits
-bound retrieval, not every preparation stage. Preserve diagnostic counts for
-invalid timestamps, missing grouping keys and incomplete absence windows.
+- Requires pySigma 2.x and Python 3.11+.
+- Keyword rules convert when `fulltext_field` is set; their entries use
+  `schema_version: 3` ([keyword search](keyword-search.md)). Other output keeps
+  version 2.
+- IPv6 CIDR values follow pySigma 2's narrower expansion (19 SigmaHQ rules
+  change), and a CIDR expanding to several patterns inside an AND is now
+  parenthesized; before, it could match events failing the rest of the AND.
+- A `value_count` over a list of fields raises
+  `SigmaFeatureNotSupportedByBackendError` instead of a `TypeError`.

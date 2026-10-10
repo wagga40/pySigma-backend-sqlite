@@ -1,0 +1,88 @@
+# Correlations
+
+Every correlation type runs in SQLite 3.38+ with its JSON functions; no custom
+SQL function is needed. A result row is one **alert occurrence**: when it
+happened, its window, the metric, and the events behind it. Separate bursts are
+separate rows. Result columns and plan execution are in
+[output format](output-format.md).
+
+## Types
+
+`event_count`, `value_count`, `value_sum`, `value_avg`, `value_median`,
+`value_percentile`, `temporal` and `temporal_ordered`. The temporal types also
+accept extended Boolean conditions such as `a and not b` or `(a or b) and c`.
+
+Thresholds may be fractional (pySigma 2) and are compared exactly:
+`event_count gte: 1.5` needs two events.
+
+## Windows
+
+- **Counts and statistics look backward.** Each distinct matching event time `t`
+  is evaluated over the inclusive window `[t - timespan, t]`. With values 0 at
+  t=0 and 100 at t=3, the average at t=3 is 50.
+- **Ordered stages** need strictly increasing timestamps; equal timestamps cannot
+  establish order. A valid sequence is found even after earlier out-of-order
+  events.
+- **Extended OR branches** are evaluated independently; their evidence is merged
+  when they describe the same window.
+- **Absence looks forward.** In `a and not b`, an `a` event opens a window that
+  fires at its deadline if no `b` arrived. Windows still open at the observation
+  horizon are reported as `incomplete_window` diagnostics, not alerts. The horizon
+  is `observation_end` (Unix seconds) or, by default, the latest valid timestamp
+  in the input, including events that match no rule.
+- **Pure-negative conditions** use observed events as context; empty input
+  invents no groups.
+
+## Grouping and counting
+
+- String group keys are lowercased with SQLite's ASCII folding; evidence keeps
+  the original spelling. `value_count` compares values with `NOCASE`.
+- Group names live inside `group_keys`, so they cannot collide with event fields.
+- An event matching several rules or condition branches counts once in
+  `event_count`.
+- Events with an invalid timestamp or a missing group key are excluded and counted
+  in the plan diagnostics. Detection rules can still match them.
+
+## Values
+
+- Statistics ignore NULL, invalid and nonfinite values. Numeric text must be a
+  valid JSON number (`12`, `-2.5`, `1e3`).
+- Percentiles interpolate linearly at rank `(n - 1) * p / 100`; percentile 50
+  equals the median, even for even sample sizes.
+- Sums use SQLite REAL arithmetic to avoid integer overflow; very large integers
+  can lose precision.
+
+## Chains and aliases
+
+- Aliases apply to each referenced rule's projection.
+- A chained correlation consumes its children's alert occurrences, with their
+  metrics and evidence. An aggregate can read a child's metric by its type name,
+  for example `event_count`.
+- Parent fields outside a child's group keys come from the child's contributing
+  events; a child counts once per parent group.
+- A correlation referenced by another is compiled into its parent, not emitted.
+  Referenced detection rules are emitted as standalone queries only with
+  `generate: true`.
+
+## Timestamps
+
+`timestamp_field` (default `timestamp`) is parsed as ISO-8601 text, which SQLite
+resolves to milliseconds. For numeric epochs use `timestamp_format` `unix`,
+`unix_ms` or `unix_us`; malformed values are excluded. Use numeric timestamps when
+finer precision matters, for example to order events within one millisecond.
+
+```python
+backend = sqliteBackend(
+    timestamp_field="SystemTime",
+    event_id_field="row_id",      # default: SQLite rowid
+    observation_end=1704067500,   # optional absence horizon
+)
+backend = sqliteBackend(timestamp_field="event_time", timestamp_format="unix")
+```
+
+## Performance
+
+The plan path indexes every stage, but dense windows can still produce evidence
+that grows quadratically, and medians and percentiles sort each sample. Prefer
+selective base rules and `execute_plan(limit=...)`; the limit bounds retrieval,
+not preparation. Measure with `tools/benchmark_correlations.py`.
