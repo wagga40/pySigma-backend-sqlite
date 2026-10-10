@@ -142,6 +142,10 @@ class CorrelationCompiler:
         if isinstance(rule, SigmaCorrelationRule):
             self.fields.update(rule.group_by or [])
             field = getattr(rule.condition, "fieldref", None)
+            if isinstance(field, list):
+                raise SigmaFeatureNotSupportedByBackendError(
+                    f"Correlation condition field list {field} is not supported"
+                )
             if field:
                 self.fields.add(field)
             for alias in rule.aliases:

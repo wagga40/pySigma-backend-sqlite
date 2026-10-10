@@ -10,6 +10,7 @@ import yaml
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite.runtime import execute_plan
 from sigma.collection import SigmaCollection
+from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 
 
 def detection(name="a", event=1):
@@ -209,6 +210,25 @@ def test_statistics_numeric_strings_nulls_and_interpolation(kind, materialized):
     assert rows[0]["metric_value"] == pytest.approx(expected[kind])
 
 
+@pytest.mark.parametrize("materialized", [False, True])
+def test_fractional_thresholds(materialized):
+    """pySigma 2 accepts non-integer thresholds; metrics compare against them exactly."""
+    count = correlation(condition={"gte": 1.5})
+    rows = execute(
+        [detection(), count], [event(0), event(1), event(20)], materialized=materialized
+    )
+    assert [r["metric_value"] for r in rows] == [2]
+    avg = correlation("value_avg", condition={"gt": 10.5, "field": "Bytes"})
+    rows = execute(
+        [detection(), avg],
+        [event(0, Bytes=10), event(1, Bytes=12)],
+        materialized=materialized,
+    )
+    assert [r["metric_value"] for r in rows] == [11]
+    events = [event(0, Bytes=10), event(1, Bytes=11)]
+    assert execute([detection(), avg], events, materialized=materialized) == []
+
+
 @pytest.mark.parametrize(
     "p,expected", [(0, 10), (25, 12.5), (50, 15), (95, 19.5), (100, 20)]
 )
@@ -321,6 +341,13 @@ def test_random_windows_against_python_reference(kind):
             "value_percentile": statistics.median(sample),
         }[kind]
         assert row["metric_value"] == pytest.approx(expected)
+
+
+def test_multi_field_value_count_is_reported_as_unsupported():
+    corr = correlation("value_count", condition={"gte": 2, "field": ["User", "OtherUser"]})
+    c = SigmaCollection.from_yaml(yaml.safe_dump_all([detection(), corr]))
+    with pytest.raises(SigmaFeatureNotSupportedByBackendError, match="field list"):
+        sqliteBackend().convert(c)
 
 
 def test_required_fields_and_runtime_cleanup_on_failure():
