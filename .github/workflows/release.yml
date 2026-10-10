@@ -31,11 +31,12 @@ jobs:
         run: poetry run pytest
       - name: Build packages
         run: poetry build
+      # PyPI trusts only the SigmaHQ repository; a release elsewhere just tests and builds.
       - name: Publish to test PyPI
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && github.repository == 'SigmaHQ/pySigma-backend-sqlite' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' }}
+        if: ${{ github.event_name == 'release' && github.repository == 'SigmaHQ/pySigma-backend-sqlite' }}
         uses: pypa/gh-action-pypi-publish@release/v1
