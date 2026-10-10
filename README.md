@@ -65,7 +65,7 @@ sigma-cli 3.1 still requires pySigma 1.x, so it installs backend 2.0.0.
 | Format | Output |
 |---|---|
 | `default` | One `SELECT * FROM logs WHERE ...` statement per rule |
-| `zircolite` | A JSON list with one entry per rule: Sigma metadata, the SQL, and what a consumer needs to run it. See [output format](docs/output-format.md) |
+| `zircolite` | A JSON list with one entry per rule: Sigma metadata, the SQL, and what a consumer needs to run it. See [output format](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/output-format.md) |
 
 ## Options
 
@@ -78,7 +78,7 @@ and does not change the timestamp expression.
 | `table` | `logs` | Table to query. A pipeline `setState` on `table` takes precedence |
 | `collate_nocase` | `false` | Emit `field='value' COLLATE NOCASE` for tables without `NOCASE` columns |
 | `max_flat_operands` | `100` | Longer AND/OR chains are nested to stay under SQLite's expression depth limit |
-| `fulltext_field` | none | Column of searchable event text; enables [keyword search](docs/keyword-search.md) |
+| `fulltext_field` | none | Column of searchable event text; enables [keyword search](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/keyword-search.md) |
 | `timestamp_field` | `timestamp` | Event time column used by correlations |
 | `timestamp_format` | `iso` | `iso`, `unix`, `unix_ms` or `unix_us` |
 | `timestamp_seconds_expression` | ISO parser | SQL turning `{field}` into Unix seconds; overrides `timestamp_format` |
@@ -119,14 +119,14 @@ All Sigma correlation types run in SQLite: `event_count`, `value_count`,
 `value_sum`, `value_avg`, `value_median`, `value_percentile`, `temporal` and
 `temporal_ordered`, including chains, aliases and extended temporal conditions.
 Each result row is one alert occurrence with its window, metric and contributing
-event IDs. Semantics are described in [correlations](docs/correlations.md);
-upgrading from backend 1.x is covered in the [migration guide](docs/migration-v2.md).
+event IDs. Semantics are described in [correlations](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/correlations.md);
+upgrading from backend 1.x is covered in the [migration guide](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/migration-v2.md).
 
 ## Keyword search
 
 Keyword (fieldless) selections need a column of searchable event text:
 `sqliteBackend(fulltext_field="_sigma_fulltext")`. Without it, keyword rules raise
-an error rather than guess. See [keyword search](docs/keyword-search.md).
+an error rather than guess. See [keyword search](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/keyword-search.md).
 
 ## Limitations
 
@@ -142,7 +142,7 @@ an error rather than guess. See [keyword search](docs/keyword-search.md).
 - **Field existence.** SQL `NULL` cannot tell a missing field from an explicit null.
 - **Multi-field `value_count`** (a list in `condition.field`) is rejected.
 - **Unknown columns.** A query naming a column the table lacks fails to prepare.
-  Add missing columns as `NULL` first; see [output format](docs/output-format.md).
+  Add missing columns as `NULL` first; see [output format](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/output-format.md).
 
 ## Development
 
