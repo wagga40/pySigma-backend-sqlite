@@ -1,8 +1,9 @@
 """Make this checkout's backend importable under pySigma 2.0.0 editable installs.
 
 pySigma 2.0.0 ships ``sigma/__init__.py``, so ``sigma`` stops being a namespace
-package and hides ``sigma/backends/sqlite`` in this working tree. Remove this file
-once the dependency floor is pysigma>=2.0.1 (SigmaHQ/pySigma#588).
+package and hides ``sigma/backends/sqlite`` in this working tree. The scripts in
+``tools/`` import it too. Remove this file and those imports once the dependency
+floor is pysigma>=2.0.1 (SigmaHQ/pySigma#588).
 """
 
 from pathlib import Path
