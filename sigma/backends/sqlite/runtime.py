@@ -81,7 +81,7 @@ def execute_plan(
 
     A limit truncates retrieval at limit+1 so the consumer can retain its
     discard-noisy-rule policy. The executor never commits the caller's work.
-    Event IDs are scoped by source table; source filenames accompany evidence.
+    Event IDs are scoped by source table; evidence carries each full source row.
     A caller may supply a cache-aware fulltext_preflight(requirements) hook;
     without one, version-3 plans validate on every execution.
     """

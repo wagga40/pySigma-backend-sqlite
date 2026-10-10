@@ -8,6 +8,12 @@ def sqlite_backend():
     return sqliteBackend()
 
 
+def test_plugin_discovery_exposes_sqlite_backend():
+    from sigma.plugins import InstalledSigmaPlugins
+
+    assert InstalledSigmaPlugins.autodiscover().backends["sqlite"] is sqliteBackend
+
+
 # ==================== Basic Tests (existing) ====================
 
 

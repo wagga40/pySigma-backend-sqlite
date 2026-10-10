@@ -31,7 +31,7 @@ from .correlation import CorrelationCompiler, numeric, quote
 
 import re
 import json
-from typing import ClassVar, Dict, List, Optional, Pattern, Tuple, Union, Any
+from typing import ClassVar, Dict, List, Optional, Tuple, Union, Any
 
 
 _SQLITE_KEYWORDS = set(
@@ -42,22 +42,20 @@ _SQLITE_KEYWORDS = set(
 class sqliteBackend(TextQueryBackend):
     """SQLite backend."""
 
-    # Operator precedence: tuple of Condition{AND,OR,NOT} in order of precedence.
-    # The backend generates grouping if required
+    identifier: ClassVar[str] = "sqlite"
     name: ClassVar[str] = "SQLite backend"
-    formats: Dict[str, str] = {
+    formats: ClassVar[Dict[str, str]] = {
         "default": "Plain SQLite queries",
         "zircolite": "Zircolite JSON format",
     }
-    requires_pipeline: bool = (
-        False  # TODO: does the backend requires that a processing pipeline is provided? This information can be used by user interface programs like Sigma CLI to warn users about inappropriate usage of the backend.
-    )
+    requires_pipeline: ClassVar[bool] = False
 
     # Correlation support
     correlation_methods: ClassVar[Dict[str, str]] = {
         "default": "Default SQLite correlation using subqueries and window functions",
     }
 
+    # Operator precedence, highest first; the backend adds grouping where required.
     precedence: ClassVar[Tuple[ConditionItem, ConditionItem, ConditionItem]] = (
         ConditionNOT,
         ConditionAND,
@@ -84,24 +82,7 @@ class sqliteBackend(TextQueryBackend):
         "="  # Token inserted between field and value (without separator)
     )
 
-    # String output
-    ## Fields
-    ### Quoting
-
-    # SQLite correct way to handle field name is detailed here : https://sqlite.org/lang_keywords.html.
-    # Double-quoting should be the way to go. But since in some case quotes are interpreted as literals we need to find an alternative.
-    # Obviously, we cannot use "[" and "]", because it is 2 different characters, so we are left with "`" (MySQL).
-    field_quote: ClassVar[str] = (
-        "`"  # Character used to quote field characters if field_quote_pattern matches (or not, depending on field_quote_pattern_negation). No field name quoting is done if not set.
-    )
-    field_quote_pattern: ClassVar[Pattern] = re.compile(
-        "^[a-zA-Z0-9_]*$"
-    )  # Quote field names if this pattern (doesn't) matches, depending on field_quote_pattern_negation. Field name is always quoted if pattern is not set.
-    field_quote_pattern_negation: ClassVar[bool] = (
-        True  # Negate field_quote_pattern result. Field name is quoted if pattern doesn't matches if set to True (default).
-    )
-
-    ## Values
+    # String values; field names are quoted by escape_and_quote_field.
     str_quote: ClassVar[str] = (
         "'"  # string quoting character (added as escaping character)
     )
@@ -126,7 +107,6 @@ class sqliteBackend(TextQueryBackend):
     add_escaped: ClassVar[str] = (
         "\\"  # Characters quoted in addition to wildcards and string quote
     )
-    # filter_chars    : ClassVar[str] = ""      # Characters filtered
     # A flattener has to decide how to store a JSON boolean. Zircolite stores the strings
     # 'true'/'false' because that is what Sigma rules compare against, while a hand-built table
     # is as likely to hold 1/0 -- and SQLite reads the bare keyword `true` as the integer 1,
@@ -151,7 +131,6 @@ class sqliteBackend(TextQueryBackend):
 
     # Special expression if wildcards can't be matched with the eq_token operator
     wildcard_match_str_expression: ClassVar[str] = "{field} LIKE '{value}' ESCAPE '\\'"
-    # wildcard_match_num_expression: ClassVar[str] = "{field} LIKE '%{value}%'"
 
     # Regular expressions
     # Regular expression query as format string with placeholders {field}, {regex}, {flag_x} where x
@@ -166,12 +145,6 @@ class sqliteBackend(TextQueryBackend):
     re_flag_prefix: bool = (
         True  # If True, the flags are prepended as (?x) group at the beginning of the regular expression, e.g. (?i). If this is not supported by the target, it should be set to False.
     )
-
-    # Mapping from SigmaRegularExpressionFlag values to static string templates that are used in
-    # flag_x placeholders in re_expression template.
-    # By default, i, m and s are defined. If a flag is not supported by the target query language,
-    # remove it from re_flags or don't define it to ensure proper error handling in case of appearance.
-    # re_flags : Dict[SigmaRegularExpressionFlag, str] = {}
 
     # SQLite's GLOB is a 2-argument operator with no ESCAPE clause (unlike LIKE);
     # emitting "ESCAPE '\'" triggers "wrong number of arguments to function GLOB()" at runtime.
@@ -268,7 +241,6 @@ class sqliteBackend(TextQueryBackend):
     or_in_operator: ClassVar[str] = (
         "IN"  # Operator used to convert OR into in-expressions. Must be set if convert_or_as_in is set
     )
-    # and_in_operator : ClassVar[str] = "contains-all"   # Operator used to convert AND into in-expressions. Must be set if convert_and_as_in is set
     list_separator: ClassVar[str] = ", "  # List element separator
 
     # Value not bound to a field
@@ -824,9 +796,6 @@ class sqliteBackend(TextQueryBackend):
         # For correlation rules, the query is already complete
         if isinstance(rule, SigmaCorrelationRule):
             return query
-
-        # TODO : fields support will be handled with a backend option (all fields by default)
-        # fields = "*" if len(rule.fields) == 0 else f"*, {', '.join(rule.fields)}"
 
         # Table name can be overridden per-pipeline via a setState transformation
         # setting the "table" state key, else fall back to the backend default.

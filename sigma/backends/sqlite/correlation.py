@@ -1,7 +1,7 @@
 """Relational correlation compiler shared by SQL and materialized execution.
 
-Every stage is a SELECT. The portable form combines stages as CTEs; the
-Zircolite executor materializes the same stages, with explicit indexes. No
+Every stage is a SELECT. The portable form combines stages as CTEs;
+runtime.execute_plan materializes the same stages, with explicit indexes. No
 finalized query or output-format dictionary is ever used as a predicate.
 """
 
@@ -28,6 +28,7 @@ def literal(value: str) -> str:
 
 
 def quote(value: str) -> str:
+    # Backticks, not double quotes: SQLite reads an unknown "name" as a string literal.
     return "`" + value.replace("`", "``") + "`"
 
 
