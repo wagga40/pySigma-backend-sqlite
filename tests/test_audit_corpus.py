@@ -50,3 +50,7 @@ def test_audit_keyword_configuration_is_explicit(tmp_path):
     result = audit_corpus.audit(tmp_path, "raw")
     assert len(result["errors"]) == 1
     assert result["errors"][0]["stage"] == "conversion"
+    # Keyword rules without fulltext_field are a visible gap, not a failed audit.
+    assert not audit_corpus.failed(result["errors"])
+    assert audit_corpus.failed([dict(stage="conversion", error="Unexpected")])
+    assert audit_corpus.failed([dict(stage="preparation", error="no such column")])

@@ -19,6 +19,20 @@ from sigma.collection import SigmaCollection
 from sigma.correlations import SigmaCorrelationRule
 
 
+KEYWORD_GAP = "Keyword search requires fulltext_field"
+
+
+def failed(errors):
+    """Invalid corpus documents, conversion errors and invalid SQL fail the audit.
+
+    Keyword rules audited without --fulltext-field stay a visible conversion gap.
+    """
+    return any(
+        e["stage"] != "conversion" or not e["error"].startswith(KEYWORD_GAP)
+        for e in errors
+    )
+
+
 def audit(path, profile, *, fulltext_field=None):
     pipeline = None
     if profile == "windows-sysmon":
@@ -140,12 +154,4 @@ if __name__ == "__main__":
         args.output.write_text(text + "\n")
     else:
         print(text)
-    # Unsupported keywords remain a visible conversion gap. Invalid generated
-    # SQL and invalid corpus documents fail the audit job.
-    sys.exit(
-        any(
-            e["stage"] in ("parse", "preparation")
-            or (e["stage"] == "conversion" and not e["error"].startswith("Value-only "))
-            for e in result["errors"]
-        )
-    )
+    sys.exit(failed(result["errors"]))
