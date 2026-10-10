@@ -114,6 +114,15 @@ class CorrelationCompiler:
         self.source_tables = {}
         self.diagnostic_queries = []
         self._discover(root)
+        fulltext = {
+            (item["table"], item["field"])
+            for rule in self.base_rules.values()
+            for item in self.backend.fulltext_requirements(rule)
+        }
+        self.fulltext_requirements = [
+            {"table": table, "field": field, "representation": "source-values-v1"}
+            for table, field in sorted(fulltext)
+        ]
         self.field_ids = {f: f"f{i}" for i, f in enumerate(sorted(self.fields))}
         # Stable identifiers make saved plans reproducible. Tables live in temp.
         identity = json.dumps(root.to_dict(), sort_keys=True, default=str)
@@ -181,6 +190,8 @@ class CorrelationCompiler:
             self.required_by_table.setdefault(table, set()).update(
                 self.backend.required_fields(rule)
             )
+        for item in self.fulltext_requirements:
+            self.required_by_table.setdefault(item["table"], set()).add(item["field"])
         for i, (table, rules) in enumerate(by_table.items()):
             self.source_tables[str(i)] = table
             fields = self.required_by_table[table]
@@ -598,7 +609,7 @@ class CorrelationCompiler:
         ctes = ", ".join(f"{s.name} AS ({s.select})" for s in self.stages)
         diagnostics = " UNION ALL ".join(self.diagnostic_queries)
         plan = {
-            "version": 2,
+            "version": 3 if self.fulltext_requirements else 2,
             "sqlite_min_version": "3.38.0",
             "prepare": [
                 dict(name=s.name, select=s.select, indexes=s.indexes)
@@ -613,4 +624,6 @@ class CorrelationCompiler:
             "event_id_field": self.backend.event_id_field,
             "source_tables": self.source_tables,
         }
+        if self.fulltext_requirements:
+            plan["fulltext"] = self.fulltext_requirements
         return "WITH " + ctes + " " + query, plan

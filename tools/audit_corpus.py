@@ -19,7 +19,7 @@ from sigma.collection import SigmaCollection
 from sigma.correlations import SigmaCorrelationRule
 
 
-def audit(path, profile):
+def audit(path, profile, *, fulltext_field=None):
     pipeline = None
     if profile == "windows-sysmon":
         from sigma.pipelines.sysmon import sysmon_pipeline
@@ -53,7 +53,7 @@ def audit(path, profile):
             errors.append(dict(stage="parse", path=str(file), error=str(exc)))
     collection = SigmaCollection(rules)
     collection.resolve_rule_references()
-    backend = sqliteBackend(pipeline)
+    backend = sqliteBackend(pipeline, fulltext_field=fulltext_field)
     backend.init_processing_pipeline("zircolite")
     for rule in collection:
         title = rule.title
@@ -80,6 +80,21 @@ def audit(path, profile):
             )
             try:
                 connection.execute("CREATE TABLE logs(row_id INTEGER PRIMARY KEY)")
+                fulltext = entry.get("fulltext", [])
+                if fulltext:
+                    from sigma.backends.sqlite.runtime import validate_fulltext
+
+                    for requirement in fulltext:
+                        table = requirement["table"]
+                        field = backend.escape_and_quote_field(requirement["field"])
+                        # Search text is a consumer prerequisite, not an absent
+                        # event field that can be materialized as NULL.
+                        connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {field} "
+                            "TEXT NOT NULL DEFAULT ''"
+                        )
+                    validate_fulltext(connection, fulltext)
+                    stats["fulltext_queries"] += len(entry["rule"])
                 if entry.get("correlation_plan"):
                     execute_plan(
                         connection, entry["correlation_plan"], include_events=False
@@ -98,6 +113,7 @@ def audit(path, profile):
         profile=profile,
         counts=dict(stats),
         errors=errors,
+        fulltext_field=fulltext_field,
         sqlite_version=sqlite3.sqlite_version,
         applicability="Profile/logsource dependent; unbounded Channel does not mean inapplicable.",
         semantic_accuracy="Not measured by conversion or preparation. See execution tests and log fixtures.",
@@ -113,8 +129,12 @@ if __name__ == "__main__":
         default="raw",
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--fulltext-field",
+        help="Provision this searchable TEXT column and enable keyword conversion",
+    )
     args = parser.parse_args()
-    result = audit(args.corpus, args.profile)
+    result = audit(args.corpus, args.profile, fulltext_field=args.fulltext_field)
     text = json.dumps(result, indent=2)
     if args.output:
         args.output.write_text(text + "\n")

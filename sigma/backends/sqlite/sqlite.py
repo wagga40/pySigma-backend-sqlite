@@ -1,6 +1,5 @@
 from sigma.conversion.deferred import DeferredQueryExpression
 from sigma.conversion.state import ConversionState
-from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.rule import SigmaRule
 from sigma.conversion.base import TextQueryBackend
 from sigma.conditions import (
@@ -22,6 +21,7 @@ from sigma.types import (
     SigmaFieldReference,
     TimestampPart,
 )
+from sigma.modifiers import SigmaCaseSensitiveModifier
 from sigma.correlations import (
     SigmaCorrelationConditionOperator,
     SigmaCorrelationRule,
@@ -273,9 +273,7 @@ class sqliteBackend(TextQueryBackend):
 
     # Value not bound to a field
 
-    # TODO : SQlite only handles FTS ("MATCH") with virtual tables. Not Handled for now.
-    # unbound_value_str_expression : ClassVar[str] = "MATCH {value}"   # Expression for string value not bound to a field as format string with placeholder {value}
-    # unbound_value_num_expression : ClassVar[str] = 'MATCH {value}'     # Expression for number value not bound to a field as format string with placeholder {value}
+    # Fieldless values are converted directly below to predicates on fulltext_field.
 
     # Query finalization: appending and concatenating deferred query part
     deferred_start: ClassVar[str] = (
@@ -294,6 +292,7 @@ class sqliteBackend(TextQueryBackend):
     event_id_field = "rowid"
     timestamp_format = "iso"
     observation_end = None
+    fulltext_field: Optional[str] = None
     timestamp_seconds_expression = (
         "ROUND((julianday({field}) - 2440587.5) * 86400000) / 1000.0"
     )
@@ -316,6 +315,7 @@ class sqliteBackend(TextQueryBackend):
             "timestamp_format",
             "collate_nocase",
             "max_flat_operands",
+            "fulltext_field",
         }
         for key in configurable & options.keys():
             value = options[key]
@@ -339,6 +339,10 @@ class sqliteBackend(TextQueryBackend):
             ]
             self.timestamp_seconds_expression = f"({numeric('{field}')}) / {divisor}.0"
         self._correlation_plans = {}
+        if self.fulltext_field is not None and (
+            not isinstance(self.fulltext_field, str) or not self.fulltext_field
+        ):
+            raise ValueError("fulltext_field must be a nonempty column name")
         super().__init__(processing_pipeline, collect_errors, **options)
 
     def convert_condition_field_eq_field(self, cond, state):
@@ -385,12 +389,46 @@ class sqliteBackend(TextQueryBackend):
                     fields.add(cond.field)
                 if isinstance(cond.value, SigmaFieldReference):
                     fields.add(cond.value.field)
+            if (
+                isinstance(cond, ConditionValueExpression)
+                and isinstance(
+                    cond.value, (SigmaString, SigmaNumber, SigmaRegularExpression)
+                )
+                and self.fulltext_field is not None
+            ):
+                fields.add(self.fulltext_field)
             for arg in getattr(cond, "args", []):
                 walk(arg)
 
         for condition in rule.detection.parsed_condition:
             walk(condition.parsed)
         return sorted(fields)
+
+    def fulltext_requirements(self, rule, state=None):
+        if self.fulltext_field is None:
+            return []
+
+        def uses_fulltext(cond):
+            return (
+                isinstance(cond, ConditionValueExpression)
+                and isinstance(
+                    cond.value, (SigmaString, SigmaNumber, SigmaRegularExpression)
+                )
+            ) or any(uses_fulltext(arg) for arg in getattr(cond, "args", []))
+
+        if state is None:
+            states = rule.get_conversion_states()
+            states = [item.processing_state for item in states]
+        else:
+            states = [state] * len(rule.detection.parsed_condition)
+        result = set()
+        for i, condition in enumerate(rule.detection.parsed_condition):
+            if uses_fulltext(condition.parsed):
+                result.add((self.resolve_table(states[i]), self.fulltext_field))
+        return [
+            {"table": table, "field": field, "representation": "source-values-v1"}
+            for table, field in sorted(result)
+        ]
 
     def convert_correlation_rule(
         self, rule, output_format=None, method=None, callback=None
@@ -909,6 +947,7 @@ class sqliteBackend(TextQueryBackend):
                 set().union(*map(set, plan["required_fields"].values()))
             )
             zircolite_rule["result_type"] = "correlation"
+            fulltext = plan.get("fulltext", [])
         else:
             zircolite_rule["required_fields"] = self.required_fields(rule)
             zircolite_rule["result_type"] = "event"
@@ -918,25 +957,54 @@ class sqliteBackend(TextQueryBackend):
                 for key in ("product", "category", "service")
                 if getattr(rule.logsource, key, None) is not None
             }
-        zircolite_rule["schema_version"] = 2
+            fulltext = self.fulltext_requirements(rule, state.processing_state)
+        if fulltext:
+            zircolite_rule["fulltext"] = fulltext
+        zircolite_rule["schema_version"] = 3 if fulltext else 2
         return zircolite_rule
 
     def finalize_output_zircolite(self, queries: List[Dict]) -> str:
         return json.dumps(list(queries))
 
-    # TODO : SQlite only handles FTS ("MATCH") with virtual tables. Not Handled for now.
+    def _fulltext_column(self):
+        if self.fulltext_field is None:
+            raise ValueError(
+                "Keyword search requires fulltext_field and a populated TEXT column; "
+                "configure fulltext_field and re-ingest old events."
+            )
+        return self.escape_and_quote_field(self.fulltext_field)
+
     def convert_condition_val_str(
         self, cond: ConditionValueExpression, state: ConversionState
     ) -> Union[str, DeferredQueryExpression]:
-        """Conversion of value-only strings."""
-        raise SigmaFeatureNotSupportedByBackendError(
-            "Value-only string expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
+        """Match a Sigma string anywhere in the captured source values."""
+        field = self._fulltext_column()
+        cased = SigmaCaseSensitiveModifier in getattr(cond.parent, "modifiers", ())
+        value = self.convert_value_str(
+            cond.value, state, no_quote=True, glob_wildcards=cased
         )
+        if cased:
+            return f"{field} GLOB '*{value}*'"
+        return f"{field} LIKE '%{value}%' ESCAPE '\\'"
 
     def convert_condition_val_num(
         self, cond: ConditionValueExpression, state: ConversionState
     ) -> Union[str, DeferredQueryExpression]:
-        """Conversion of value-only numbers."""
-        raise SigmaFeatureNotSupportedByBackendError(
-            "Value-only number expressions (i.e Full Text Search or 'keywords' search) are not supported by the backend."
+        """Match a number's source spelling as text."""
+        field = self._fulltext_column()
+        value = (
+            str(cond.value)
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+            .replace("'", "''")
         )
+        return f"{field} LIKE '%{value}%' ESCAPE '\\'"
+
+    def convert_condition_val_re(
+        self, cond: ConditionValueExpression, state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        field = self._fulltext_column()
+        regex = self.convert_value_re(cond.value, state)
+        flags = self.get_flag_template(cond.value)
+        return self.re_expression.format(field=field, regex=regex, **flags)
