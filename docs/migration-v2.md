@@ -42,7 +42,9 @@ output before giving it 2.x rulesets.
 - Requires pySigma 2.x and Python 3.11+.
 - Keyword rules convert when `fulltext_field` is set; their entries use
   `schema_version: 3` ([keyword search](keyword-search.md)). Other output keeps
-  version 2.
+  version 2. Without it they still raise `SigmaFeatureNotSupportedByBackendError`,
+  but the message changed: update allowlists that match the old
+  "Value-only string expressions..." text.
 - IPv6 CIDR values follow pySigma 2's narrower expansion (19 SigmaHQ rules
   change), and a CIDR expanding to several patterns inside an AND is now
   parenthesized; before, it could match events failing the rest of the AND.

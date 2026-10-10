@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 import yaml
 from sigma.collection import SigmaCollection
+from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite import runtime
 
@@ -144,8 +145,19 @@ def test_validate_fulltext_rejects_missing_nontext_and_null_before_widening():
 
 def test_keyword_without_fulltext_field_has_actionable_error():
     collection = SigmaCollection.from_yaml(yaml.safe_dump(detection(["needle"])))
-    with pytest.raises(ValueError, match="fulltext_field"):
+    with pytest.raises(SigmaFeatureNotSupportedByBackendError, match="fulltext_field"):
         sqliteBackend().convert(collection)
+
+
+def test_keyword_without_fulltext_field_is_skipped_when_collecting_errors():
+    collection = SigmaCollection.from_yaml(
+        yaml.safe_dump_all(
+            [detection(["needle"]), detection({"Host": "h"}, name="named")]
+        )
+    )
+    backend = sqliteBackend(collect_errors=True)
+    assert backend.convert(collection) == ["SELECT * FROM logs WHERE Host='h'"]
+    assert [rule.title for rule, _ in backend.errors] == ["search"]
 
 
 def test_fulltext_preflight_does_not_widen_old_table():

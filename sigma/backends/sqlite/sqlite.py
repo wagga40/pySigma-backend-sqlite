@@ -21,6 +21,7 @@ from sigma.types import (
     SigmaFieldReference,
     TimestampPart,
 )
+from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 from sigma.modifiers import SigmaCaseSensitiveModifier
 from sigma.correlations import (
     SigmaCorrelationConditionOperator,
@@ -940,7 +941,8 @@ class sqliteBackend(TextQueryBackend):
 
     def _fulltext_column(self):
         if self.fulltext_field is None:
-            raise ValueError(
+            # A SigmaError, so collect_errors (sigma-cli --skip-unsupported) skips only this rule.
+            raise SigmaFeatureNotSupportedByBackendError(
                 "Keyword search requires fulltext_field and a populated TEXT column; "
                 "configure fulltext_field and re-ingest old events."
             )
