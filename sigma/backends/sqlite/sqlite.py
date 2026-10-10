@@ -12,7 +12,9 @@ from sigma.conditions import (
 )
 from sigma.types import (
     SigmaBool,
+    SigmaCasedString,
     SigmaCompareExpression,
+    SigmaExpansion,
     SigmaNumber,
     SigmaRegularExpression,
     SigmaString,
@@ -22,7 +24,6 @@ from sigma.types import (
     TimestampPart,
 )
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
-from sigma.modifiers import SigmaCaseSensitiveModifier
 from sigma.correlations import (
     SigmaCorrelationConditionOperator,
     SigmaCorrelationRule,
@@ -365,7 +366,8 @@ class sqliteBackend(TextQueryBackend):
             if (
                 isinstance(cond, ConditionValueExpression)
                 and isinstance(
-                    cond.value, (SigmaString, SigmaNumber, SigmaRegularExpression)
+                    cond.value,
+                    (SigmaString, SigmaNumber, SigmaRegularExpression, SigmaExpansion),
                 )
                 and self.fulltext_field is not None
             ):
@@ -385,7 +387,8 @@ class sqliteBackend(TextQueryBackend):
             return (
                 isinstance(cond, ConditionValueExpression)
                 and isinstance(
-                    cond.value, (SigmaString, SigmaNumber, SigmaRegularExpression)
+                    cond.value,
+                    (SigmaString, SigmaNumber, SigmaRegularExpression, SigmaExpansion),
                 )
             ) or any(uses_fulltext(arg) for arg in getattr(cond, "args", []))
 
@@ -955,12 +958,26 @@ class sqliteBackend(TextQueryBackend):
             )
         return self.escape_and_quote_field(self.fulltext_field)
 
+    def convert_condition_val(
+        self, cond: ConditionValueExpression, state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        """Also OR the values of keyword expansions (|windash, |base64offset)."""
+        if isinstance(cond.value, SigmaExpansion):
+            return self.convert_condition_or(
+                ConditionOR(
+                    [ConditionValueExpression(value) for value in cond.value.values],
+                    cond.source,
+                ),
+                state,
+            )
+        return super().convert_condition_val(cond, state)
+
     def convert_condition_val_str(
         self, cond: ConditionValueExpression, state: ConversionState
     ) -> Union[str, DeferredQueryExpression]:
         """Match a Sigma string anywhere in the captured source values."""
         field = self._fulltext_column()
-        cased = SigmaCaseSensitiveModifier in getattr(cond.parent, "modifiers", ())
+        cased = isinstance(cond.value, SigmaCasedString)
         value = self.convert_value_str(
             cond.value, state, no_quote=True, glob_wildcards=cased
         )

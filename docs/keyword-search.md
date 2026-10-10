@@ -16,9 +16,9 @@ to search.
 Keywords become substring predicates, `_sigma_fulltext LIKE '%event::clear%' ESCAPE '\'`.
 Sigma's `*` and `?` keep their meaning; punctuation and SQL wildcard characters
 stay literal. Keyword `|all`, negation, combination with named fields, numbers
-(searched as text), `|cased` (`GLOB`) and `|re` (`REGEXP`) all work. FTS5 is
-not used because its tokenization would change substring and punctuation
-semantics.
+(searched as text), `|cased` (`GLOB`), `|re` (`REGEXP`), `|windash` and
+`|base64offset` all work. FTS5 is not used because its tokenization would change
+substring and punctuation semantics.
 
 ## The `source-values-v1` text
 
