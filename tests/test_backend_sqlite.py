@@ -237,6 +237,40 @@ def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBac
     }
 
 
+def test_sqlite_cidr_expanding_to_several_patterns_stays_grouped(
+    sqlite_backend: sqliteBackend,
+):
+    import sqlite3
+
+    query = sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
+            title: Test
+            status: test
+            logsource:
+                category: test_category
+                product: test_product
+            detection:
+                sel:
+                    Image|endswith: foo.exe
+                    DestinationIp|cidr: 172.16.0.0/15
+                condition: sel
+        """
+        )
+    )[0]
+    assert query == (
+        "SELECT * FROM logs WHERE Image LIKE '%foo.exe' ESCAPE '\\' AND "
+        "(DestinationIp LIKE '172.16.%' ESCAPE '\\' OR DestinationIp LIKE '172.17.%' ESCAPE '\\')"
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE logs (Image TEXT, DestinationIp TEXT)")
+    connection.executemany(
+        "INSERT INTO logs VALUES (?, ?)",
+        [("c:\\foo.exe", "172.17.0.1"), ("c:\\bar.exe", "172.17.0.1")],
+    )
+    assert connection.execute(query).fetchall() == [("c:\\foo.exe", "172.17.0.1")]
+
+
 def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):
     assert (
         sqlite_backend.convert(

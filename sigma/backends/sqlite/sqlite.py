@@ -809,6 +809,9 @@ class sqliteBackend(TextQueryBackend):
             ],
             cond.source,
         )
+        if len(expanded) > 1 and isinstance(cond.parent, ConditionAND):
+            # The parent AND sees a field comparison, not this OR, so it adds no parentheses.
+            return self.convert_condition_group(expanded_cond, state)
         return self.convert_condition(expanded_cond, state)
 
     def finalize_query_default(
