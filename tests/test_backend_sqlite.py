@@ -235,7 +235,12 @@ def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBac
     connection.execute("CREATE TABLE logs (field TEXT)")
     connection.executemany(
         "INSERT INTO logs VALUES (?)",
-        [("2001:db8::1",), ("2001:db8:0:0:1::1",), ("2001:db8:0:1::1",), ("2001:db9::1",)],
+        [
+            ("2001:db8::1",),
+            ("2001:db8:0:0:1::1",),
+            ("2001:db8:0:1::1",),
+            ("2001:db9::1",),
+        ],
     )
     assert {row[0] for row in connection.execute(query)} == {
         "2001:db8::1",

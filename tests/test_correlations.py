@@ -344,7 +344,9 @@ def test_random_windows_against_python_reference(kind):
 
 
 def test_multi_field_value_count_is_reported_as_unsupported():
-    corr = correlation("value_count", condition={"gte": 2, "field": ["User", "OtherUser"]})
+    corr = correlation(
+        "value_count", condition={"gte": 2, "field": ["User", "OtherUser"]}
+    )
     c = SigmaCollection.from_yaml(yaml.safe_dump_all([detection(), corr]))
     with pytest.raises(SigmaFeatureNotSupportedByBackendError, match="field list"):
         sqliteBackend().convert(c)
