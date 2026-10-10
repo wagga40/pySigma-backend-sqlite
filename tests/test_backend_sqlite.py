@@ -282,6 +282,50 @@ def test_sqlite_cidr_expanding_to_several_patterns_stays_grouped(
     assert connection.execute(query).fetchall() == [("c:\\foo.exe", "172.17.0.1")]
 
 
+@pytest.mark.parametrize(
+    "condition,expected",
+    [
+        ("sel1 and sel2", {("11.1.2.3", "x")}),
+        ("sel2 and sel1", {("11.1.2.3", "x")}),
+        ("all of sel*", {("11.1.2.3", "x")}),
+        ("other or sel2 and sel1", {("11.1.2.3", "x")}),
+        ("sel2 or sel1", {("10.1.2.3", "y"), ("11.1.2.3", "y"), ("11.1.2.3", "x")}),
+        ("sel2 and not sel1", set()),
+    ],
+)
+def test_sqlite_cidr_selection_combined_by_condition_stays_grouped(
+    sqlite_backend: sqliteBackend, condition, expected
+):
+    import sqlite3
+
+    query = sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            f"""
+            title: Test
+            status: test
+            logsource:
+                category: test_category
+                product: test_product
+            detection:
+                sel1:
+                    src|cidr: 10.0.0.0/7
+                sel2:
+                    user: x
+                other:
+                    user: none
+                condition: {condition}
+        """
+        )
+    )[0]
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE logs (src TEXT, user TEXT)")
+    connection.executemany(
+        "INSERT INTO logs VALUES (?, ?)",
+        [("10.1.2.3", "y"), ("11.1.2.3", "y"), ("11.1.2.3", "x")],
+    )
+    assert set(connection.execute(query).fetchall()) == expected
+
+
 def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):
     assert (
         sqlite_backend.convert(

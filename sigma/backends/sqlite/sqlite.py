@@ -769,22 +769,29 @@ class sqliteBackend(TextQueryBackend):
                 "Case-sensitive field equals string value expressions with strings are not supported by the backend."
             )
 
+    def compare_precedence(self, outer, inner) -> bool:
+        # A CIDR expanding to several patterns converts into an OR; group it like pySigma
+        # groups a SigmaExpansion, whatever selection or condition shape contains it.
+        if (
+            isinstance(inner, ConditionFieldEqualsValueExpression)
+            and isinstance(inner.value, SigmaCIDRExpression)
+            and len(inner.value.expand()) > 1
+        ):
+            return isinstance(outer, ConditionOR)
+        return super().compare_precedence(outer, inner)
+
     def convert_condition_field_eq_val_cidr(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
     ) -> Union[str, DeferredQueryExpression]:
         """Conversion of field matches CIDR value expressions."""
         cidr: SigmaCIDRExpression = cond.value
-        expanded = cidr.expand()
         expanded_cond = ConditionOR(
             [
                 ConditionFieldEqualsValueExpression(cond.field, SigmaString(network))
-                for network in expanded
+                for network in cidr.expand()
             ],
             cond.source,
         )
-        if len(expanded) > 1 and isinstance(cond.parent, ConditionAND):
-            # The parent AND sees a field comparison, not this OR, so it adds no parentheses.
-            return self.convert_condition_group(expanded_cond, state)
         return self.convert_condition(expanded_cond, state)
 
     def finalize_query_default(
