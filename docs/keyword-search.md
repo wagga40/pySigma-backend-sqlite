@@ -44,7 +44,7 @@ version-2 correlation plans on a captured database: those plans have no
 This is especially relevant when captured values include fields that normal
 flattening would exclude. Zircolite performs this filtering for both cases.
 
-The [companion Zircolite change](integrations/zircolite-keyword-search.md)
+The companion Zircolite change
 enables capture automatically when loaded rules require it, including correlation
 dependencies. Library callers can load those rules before `run_streaming`, or
 pass `ProcessingConfig(fulltext_capture=True)` explicitly. Captured databases
@@ -120,7 +120,7 @@ event remained unmatched despite a filename containing `truncate -s`. Saved
 database reload produced the same results; detection and keepflat exports
 omitted captured text.
 
-A [reproducible synthetic benchmark](integrations/keyword-capture-benchmark.py)
+A synthetic benchmark
 ingests 100,000 JSONL events (54.54 MiB), then searches for one substring with
 100 matches. Each event includes a 400-character payload, named fields and a
 nested array. Measurements below are medians of three fresh processes on macOS
