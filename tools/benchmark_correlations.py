@@ -50,7 +50,7 @@ correlation:
     )
     result = dict(events=size, kind=kind, density="dense" if dense else "sparse")
     try:
-        rows, diagnostics = execute_plan(
+        rows, _ = execute_plan(
             connection, entry["correlation_plan"], include_events=False
         )
         result.update(alerts=len(rows), status="ok")

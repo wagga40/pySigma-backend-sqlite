@@ -17,7 +17,11 @@ from sigma.collection import SigmaCollection
 from sigma.correlations import SigmaCorrelationRule
 
 from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite.runtime import ensure_fields, execute_plan
+from sigma.backends.sqlite.runtime import (
+    ensure_fields,
+    execute_plan,
+    validate_fulltext,
+)
 
 KEYWORD_GAP = "Keyword search requires fulltext_field"
 
@@ -90,14 +94,14 @@ def audit(path, profile, *, fulltext_field=None):
             connection.create_function(
                 "regexp",
                 2,
-                lambda pattern, value: bool(value and re.search(pattern, str(value))),
+                lambda pattern, value: (
+                    value is not None and re.search(pattern, str(value)) is not None
+                ),
             )
             try:
                 connection.execute("CREATE TABLE logs(row_id INTEGER PRIMARY KEY)")
                 fulltext = entry.get("fulltext", [])
                 if fulltext:
-                    from sigma.backends.sqlite.runtime import validate_fulltext
-
                     for requirement in fulltext:
                         table = requirement["table"]
                         field = backend.escape_and_quote_field(requirement["field"])
