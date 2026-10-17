@@ -26,11 +26,11 @@ correlations cannot span separate databases.
 
 ## Running detection rules
 
-1. Register `REGEXP` if any rule uses `|re` (see the README's Limitations).
+1. Register `REGEXP` if any rule uses `|re` (see the README's [Limitations](../README.md#limitations)).
 2. Add columns the table lacks, as `NULL`, so a query naming them still prepares:
    `runtime.ensure_fields(connection, {entry["source_table"]: entry["required_fields"]})`.
    It adds each missing column as `TEXT COLLATE NOCASE`. Validate `fulltext`
-   columns first instead; never create them empty.
+   columns first instead ([keyword search](keyword-search.md#contract)).
 3. Run each statement in `rule`.
 
 ## Correlation results
@@ -52,8 +52,8 @@ ordered by occurrence time.
 
 ## Correlation plans
 
-`correlation_plan` runs the same relations as indexed temporary tables, avoiding
-a full scan per window lookup, and returns full event evidence:
+`execute_plan` runs `correlation_plan`, the same relations, as indexed temporary
+tables, avoiding a full scan per window lookup, and returns full event evidence:
 
 ```python
 import json
@@ -65,8 +65,9 @@ alerts, diagnostics = execute_plan(connection, entry["correlation_plan"])
 
 `execute_plan(connection, plan, *, limit=None, include_events=True, fulltext_preflight=None)`:
 
-- checks the plan version and SQLite >= 3.38, and validates `fulltext` for
-  version-3 plans (pass `fulltext_preflight` to replace that check with a cached one);
+- checks the plan version, a nonnegative `limit` and SQLite >= 3.38, and
+  validates `fulltext` for version-3 plans (pass `fulltext_preflight` to replace
+  that check with a cached one);
 - adds missing columns like `ensure_fields`, which changes the source table;
 - creates, indexes, queries and finally drops `sigma_*` temporary tables;
 - returns alerts with parsed `group_keys`/`event_ids` and, unless

@@ -11,7 +11,7 @@ output before giving it 2.x rulesets.
 - Requires pySigma >=1.5.1,<2 and Python 3.10+ (2.1 raises both, see below).
   Correlations need SQLite 3.38+ with JSON functions.
 - The default table is `logs` in both output formats.
-- Options are constructor keywords (see the README's Options). Point
+- Options are constructor keywords (see the README's [Options](../README.md#options)). Point
   `timestamp_field` and `event_id_field` at your schema.
 - On tables without `NOCASE` columns, set `collate_nocase=True` so string
   equality ignores case.
@@ -39,7 +39,7 @@ output before giving it 2.x rulesets.
 
 ## From 2.0 to 2.1
 
-- Requires pySigma 2.x and Python 3.11+.
+- Requires Python 3.11+ and pySigma 2; backend 2.1.1 needs pySigma 2.0.1 or newer.
 - Keyword rules convert when `fulltext_field` is set; their entries use
   `schema_version: 3` ([keyword search](keyword-search.md)). Other output keeps
   version 2. Without it they still raise `SigmaFeatureNotSupportedByBackendError`,

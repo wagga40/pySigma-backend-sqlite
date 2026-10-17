@@ -1,10 +1,9 @@
 # Correlations
 
-Every correlation type runs in SQLite 3.38+ with its JSON functions; no custom
-SQL function is needed. A result row is one **alert occurrence**: when it
-happened, its window, the metric, and the events behind it. Separate bursts are
-separate rows. Result columns and plan execution are in
-[output format](output-format.md).
+Every correlation type runs on SQLite's JSON functions; no custom SQL function is
+needed. A result row is one **alert occurrence**: when it happened, its window,
+the metric, and the events behind it. Separate bursts are separate rows. Result
+columns and plan execution are in [output format](output-format.md).
 
 ## Types
 
@@ -60,9 +59,13 @@ Thresholds may be fractional (pySigma 2) and are compared exactly:
   for example `event_count`.
 - Parent fields outside a child's group keys come from the child's contributing
   events; a child counts once per parent group.
-- A correlation referenced by another is compiled into its parent, not emitted.
-  Referenced detection rules are emitted as standalone queries only with
-  `generate: true`.
+- A correlation referenced by another is compiled into its parent. With
+  `generate: true` on the parent, the referenced rules, detections and
+  correlations alike, are also emitted on their own.
+- On SQLite 3.54 and later, the standalone SQL of a large chain, such as four
+  stacked correlations or a correlation over two chained ones, exceeds SQLite's
+  subquery nesting limit ("VIEWs and/or subqueries nested too deep").
+  `execute_plan` runs each stage on its own and is not affected.
 
 ## Timestamps
 
