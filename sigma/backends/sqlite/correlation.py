@@ -11,7 +11,7 @@ import hashlib
 import itertools
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from sigma.correlations import (
     CorrelationConditionAND,
@@ -37,15 +37,30 @@ def quote(value: str) -> str:
     return "`" + value.replace("`", "``") + "`"
 
 
+# A name SQLite reads as an identifier without quoting, unless it is a keyword.
+BARE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+FULLTEXT_REPRESENTATION = "source-values-v1"
+# The largest finite double: a larger REAL is an infinity.
+MAX_REAL = "1.7976931348623157e308"
+NUMERIC_KINDS = ("value_sum", "value_avg", "value_median", "value_percentile")
+
+
+def digest(rule, length: int) -> str:
+    """Stable hex identity of a rule's content."""
+    identity = json.dumps(rule.to_dict(), sort_keys=True, default=str)
+    return hashlib.sha256(identity.encode()).hexdigest()[:length]
+
+
 def json_object(pairs: list[tuple[str, str]]) -> str:
-    # SQLite 3.38 has a 127-argument function limit. Patch small objects to
-    # support rules referencing more than 63 fields. json_patch omits members
-    # whose value is NULL, which json_extract reads back as NULL all the same.
+    # SQLite 3.38 caps a function at 127 arguments, 63 pairs. Build objects of
+    # 30 pairs and json_patch them together; json_patch omits NULL members,
+    # which json_extract reads back as NULL all the same.
+    chunk = 30
     objects = [
         "json_object("
-        + ", ".join(f"{literal(k)}, {v}" for k, v in pairs[i : i + 30])
+        + ", ".join(f"{literal(k)}, {v}" for k, v in pairs[i : i + chunk])
         + ")"
-        for i in range(0, len(pairs), 30)
+        for i in range(0, len(pairs), chunk)
     ]
     if not objects:
         return "'{}'"
@@ -59,10 +74,10 @@ def numeric(expression: str) -> str:
     """Accept finite SQLite numbers and JSON-number strings, never CAST junk to 0."""
     return (
         f"CASE WHEN typeof({expression}) = 'integer' THEN {expression} "
-        f"WHEN typeof({expression}) = 'real' AND abs({expression}) <= 1.7976931348623157e308 THEN {expression} "
+        f"WHEN typeof({expression}) = 'real' AND abs({expression}) <= {MAX_REAL} THEN {expression} "
         f"WHEN typeof({expression}) = 'text' THEN CASE WHEN json_valid(trim({expression})) "
         f"THEN CASE WHEN json_type(trim({expression})) IN ('integer', 'real') "
-        f"AND abs(CAST({expression} AS REAL)) <= 1.7976931348623157e308 "
+        f"AND abs(CAST({expression} AS REAL)) <= {MAX_REAL} "
         f"THEN CAST({expression} AS REAL) END END END"
     )
 
@@ -98,7 +113,7 @@ def terms(node, negative=False):
     return result
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Stage:
     name: str
     select: str
@@ -121,18 +136,14 @@ class CorrelationCompiler:
         self.diagnostic_queries = []
         self._discover(root)
         fulltext = {
-            (item["table"], item["field"])
+            (item["table"], item["field"]): item
             for rule in self.base_rules.values()
             for item in self.backend.fulltext_requirements(rule)
         }
-        self.fulltext_requirements = [
-            {"table": table, "field": field, "representation": "source-values-v1"}
-            for table, field in sorted(fulltext)
-        ]
+        self.fulltext_requirements = [fulltext[key] for key in sorted(fulltext)]
         self.field_ids = {f: f"f{i}" for i, f in enumerate(sorted(self.fields))}
         # Stable identifiers make saved plans reproducible. Tables live in temp.
-        identity = json.dumps(root.to_dict(), sort_keys=True, default=str)
-        self.prefix = "sigma_" + hashlib.sha256(identity.encode()).hexdigest()[:12]
+        self.prefix = "sigma_" + digest(root, 12)
         self.raw = {}
         self._raw_sources()
 
@@ -165,6 +176,17 @@ class CorrelationCompiler:
             self.base_rules[id(rule)] = rule
         self.active.remove(id(rule))
 
+    @staticmethod
+    def _alias_mapping(rule, ref):
+        """Map each alias of a correlation to the field it names in one reference."""
+        names = (ref.reference, ref.rule.name, str(ref.rule.id))
+        return {
+            alias.alias: field
+            for alias in rule.aliases
+            for target, field in alias.mapping.items()
+            if target.reference in names
+        }
+
     def _field(self, payload, field):
         return f"json_extract({payload}, '$.{self.field_ids[field]}')"
 
@@ -185,12 +207,7 @@ class CorrelationCompiler:
         if field:
             needed.add(field)
         for ref in rule.referenced_rules:
-            mapping = {
-                a.alias: f
-                for a in rule.aliases
-                for r, f in a.mapping.items()
-                if r.reference in (ref.reference, ref.rule.name, str(ref.rule.id))
-            }
+            mapping = self._alias_mapping(rule, ref)
             self._physical_fields(ref.rule, {mapping.get(f, f) for f in needed})
 
     def _raw_sources(self):
@@ -215,7 +232,7 @@ class CorrelationCompiler:
                     (
                         fid,
                         f"CASE WHEN typeof({quote(field)})='real' "
-                        f"AND abs({quote(field)}) > 1.7976931348623157e308 THEN NULL ELSE {quote(field)} END",
+                        f"AND abs({quote(field)}) > {MAX_REAL} THEN NULL ELSE {quote(field)} END",
                     )
                     for field, fid in self.field_ids.items()
                     if field in fields
@@ -300,12 +317,7 @@ class CorrelationCompiler:
             return [f"SELECT eid, ts{columns} FROM {raw}"]
         sources = []
         for ref in rule.referenced_rules:
-            mapping = {
-                a.alias: f
-                for a in rule.aliases
-                for r, f in a.mapping.items()
-                if r.reference in (ref.reference, ref.rule.name, str(ref.rule.id))
-            }
+            mapping = self._alias_mapping(rule, ref)
             sources.extend(self.contexts(ref.rule, [mapping.get(f, f) for f in fields]))
         return sources
 
@@ -326,19 +338,14 @@ class CorrelationCompiler:
         for slot, ref in enumerate(rule.referenced_rules):
             names[ref.reference] = slot
             names[str(ref.rule.name or ref.rule.id)] = slot
-            mapping = {
-                a.alias: f
-                for a in rule.aliases
-                for r, f in a.mapping.items()
-                if r.reference in (ref.reference, ref.rule.name, str(ref.rule.id))
-            }
+            mapping = self._alias_mapping(rule, ref)
             groups = [
                 group_key(self._field("s.payload", mapping.get(f, f))) for f in group
             ]
             value = (
                 self._field("s.payload", mapping.get(field, field)) if field else "NULL"
             )
-            if kind in ("value_sum", "value_avg", "value_median", "value_percentile"):
+            if kind in NUMERIC_KINDS:
                 value = numeric(value)
             columns = "".join(f", {expr} AS g{i}" for i, expr in enumerate(groups))
             branches.append(
@@ -549,7 +556,7 @@ class CorrelationCompiler:
                     )
                     + ")"
                 )
-            if kind in ("value_sum", "value_avg", "value_median", "value_percentile"):
+            if kind in NUMERIC_KINDS:
                 evidence_filter += " AND m.v IS NOT NULL"
             evidence = (
                 f"(SELECT json_group_array(DISTINCT e.value) FROM {matches} m, "
@@ -605,9 +612,7 @@ class CorrelationCompiler:
             ]
         )
         order = ", ".join(gs + ["end", "start", "metric", "evidence"])
-        node_identity = hashlib.sha256(
-            json.dumps(rule.to_dict(), sort_keys=True, default=str).encode()
-        ).hexdigest()[:16]
+        node_identity = digest(rule, 16)
         result = self.add(
             stem + "_alerts",
             f"SELECT {literal('sigma_alert_' + node_identity + ':')} || ROW_NUMBER() OVER (ORDER BY {order}) AS alert_id, "
@@ -635,10 +640,7 @@ class CorrelationCompiler:
         plan = {
             "version": 3 if self.fulltext_requirements else 2,
             "sqlite_min_version": "3.38.0",
-            "prepare": [
-                dict(name=s.name, select=s.select, indexes=s.indexes)
-                for s in self.stages
-            ],
+            "prepare": [asdict(s) for s in self.stages],
             "query": query,
             "diagnostics": diagnostics,
             "cleanup": [s.name for s in reversed(self.stages)],
