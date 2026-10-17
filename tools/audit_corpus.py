@@ -13,7 +13,6 @@ import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import conftest  # noqa: E402,F401  (pySigma 2.0.0 editable-install workaround)
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite.runtime import ensure_fields, execute_plan
 from sigma.collection import SigmaCollection

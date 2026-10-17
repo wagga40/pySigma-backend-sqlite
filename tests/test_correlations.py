@@ -412,6 +412,61 @@ def test_generate_true_finalizes_referenced_detection():
     assert entries[1]["correlation"] is True
 
 
+@pytest.mark.parametrize("generate", [None, False, True])
+@pytest.mark.parametrize("output_format", ["default", "zircolite"])
+def test_chained_generate_controls_child_output(generate, output_format):
+    parent = correlation("event_count", ("burst",), {"gte": 1})
+    if generate is not None:
+        parent["correlation"]["generate"] = generate
+    output = sqliteBackend().convert(
+        SigmaCollection.from_dicts([detection(), correlation(name="burst"), parent]),
+        output_format,
+    )
+    entries = json.loads(output) if output_format == "zircolite" else output
+    assert len(entries) == (2 if generate else 1)
+    if output_format == "zircolite":
+        assert [entry["title"] for entry in entries] == (
+            ["burst", "corr"] if generate else ["corr"]
+        )
+    else:
+        assert all(query.startswith("WITH ") for query in entries)
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_overlapping_chained_branches_merge_sorted_evidence(materialized, grouped):
+    parent = correlation(
+        "temporal",
+        ("burst", "success"),
+        "burst or (burst and success) or success",
+        **{"group-by": ["Host"] if grouped else []},
+    )
+    docs = [detection(), detection("success", 2), correlation(name="burst"), parent]
+    events = [
+        event(0),
+        event(1),
+        event(2),
+        event(2, EventID=2),
+        event(20, Host="other"),
+        event(21, Host="other"),
+        event(22, Host="other"),
+        event(22, Host="other", EventID=2),
+    ]
+    rows = execute(docs, events, materialized=materialized)
+    assert len(rows) == 4
+    for row, ids, host in zip(
+        (rows[1], rows[3]),
+        (["0:1", "0:2", "0:3", "0:4"], ["0:5", "0:6", "0:7", "0:8"]),
+        ("h", "other"),
+    ):
+        assert row["group_keys"] == ({"Host": host} if grouped else {})
+        assert row["event_ids"] == ids
+        assert row["event_count"] == 4
+        assert row["metric_value"] == 2
+        assert len(row["child_alert_ids"]) == 2
+        assert row["child_alert_ids"] == sorted(set(row["child_alert_ids"]))
+
+
 @pytest.mark.parametrize("field", ["Group", "1field", "x`y", "user.name"])
 def test_identifiers_and_constructor_options_execute(field):
     rule = detection()

@@ -560,21 +560,24 @@ class CorrelationCompiler:
             ]
         combined = self.add(stem + "_combined", " UNION ".join(results))
         # OR branches may describe the same occurrence with different evidence.
-        # Merge that evidence instead of emitting two alerts for one window.
+        # Read the combined relation once: repeated references expand the CTE
+        # graph enough to hit SQLite 3.54's cursor limit in chained correlations.
+        # Tag the two arrays instead of joining their elements to each other.
+        # The LEFT JOIN keeps windows whose evidence or children are empty.
         keys = ", ".join(["start", "end"] + gs)
-        windows = self.add(
-            stem + "_windows",
-            f"SELECT {keys}, MAX(metric) AS metric FROM {combined} GROUP BY {keys}",
+        expanded = self.add(
+            stem + "_expanded",
+            f'SELECT {", ".join("c." + k for k in ["start", "end"] + gs)}, '
+            f"c.metric, a.key AS kind, e.value AS item FROM {combined} c "
+            "JOIN json_each(json_array(json(c.evidence), json(c.children))) a "
+            "LEFT JOIN json_each(a.value) e ON 1",
         )
-        merged = []
-        for column in ("evidence", "children"):
-            merged.append(
-                f"(SELECT json_group_array(value) FROM (SELECT DISTINCT e.value FROM {combined} c, "
-                f'json_each(c.{column}) e WHERE {self.group_equal("c", "a", count)}'
-                f"c.start=a.start AND c.end=a.end ORDER BY e.value)) AS {column}"
-            )
         combined = self.add(
-            stem + "_merged", f'SELECT a.*, {", ".join(merged)} FROM {windows} a'
+            stem + "_merged",
+            f"SELECT {keys}, MAX(metric) AS metric, "
+            "json_group_array(DISTINCT item) FILTER (WHERE kind=0 AND item IS NOT NULL) AS evidence, "
+            "json_group_array(DISTINCT item) FILTER (WHERE kind=1 AND item IS NOT NULL) AS children "
+            f"FROM (SELECT * FROM {expanded} ORDER BY {keys}, kind, item) GROUP BY {keys}",
         )
         group_json = json_object([(f, quote(g)) for f, g in zip(group, gs)])
         payload = json_object(

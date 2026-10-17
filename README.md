@@ -17,7 +17,7 @@ Maintained by [wagga](https://github.com/wagga40/).
 pip install pysigma-backend-sqlite
 ```
 
-Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) 2.x.
+Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) >=2.0.1,<3.0.
 Backend 2.0.0 is the last release for pySigma 1.5. Correlation output needs
 SQLite 3.38 or newer.
 
@@ -132,8 +132,15 @@ an error rather than guess. See [keyword search](https://github.com/wagga40/pySi
 
 - **REGEXP.** SQLite has no built-in `REGEXP`. Register one that is false for `NULL`:
   `connection.create_function("regexp", 2, lambda p, v: v is not None and re.search(p, str(v)) is not None)`.
-  pySigma 2 validates `|re` patterns with RE2, so rules with lookarounds or
-  backreferences are rejected when parsed.
+  By default, pySigma validates `|re` patterns with RE2, so rules with lookarounds
+  or backreferences are rejected when parsed. For trusted rules, explicitly pass
+  `policy=TrustedPolicy` (from `sigma.policy.profiles`) to
+  `SigmaCollection.from_yaml()` to use Python regex validation; the registered
+  SQLite function must support the same regex syntax.
+- **Expansion limits.** pySigma 2.0.1 limits `windash` to three expandable dash
+  occurrences per value and placeholder expansion to 200 results. Inputs above
+  those limits raise parsing or processing errors; the backend does not bypass
+  the limits.
 - **CIDR.** SQLite has no network type. Prefix patterns match IPv6 addresses only
   in the spellings pySigma expands to.
 - **Case folding** (`NOCASE`, `LIKE`) is ASCII only.
@@ -151,6 +158,10 @@ poetry install
 poetry run pytest
 SQLITE_MIN_BINARY=/path/to/sqlite-3.38 poetry run pytest tests/test_sqlite_minimum.py
 ```
+
+CI also runs the full suite against SQLite 3.54, which limits expansion of
+repeated CTE references. Correlation evidence is merged in one pass to keep
+chained queries within that limit.
 
 `tools/audit_corpus.py` converts and prepares a SigmaHQ checkout per profile
 (coverage, not detection accuracy). `tools/benchmark_correlations.py` times

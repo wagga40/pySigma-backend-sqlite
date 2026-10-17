@@ -31,6 +31,17 @@ jobs:
           cd /tmp/sqlite-amalgamation-3380000
           cc -O2 -DSQLITE_THREADSAFE=0 shell.c sqlite3.c -lm -ldl -o /tmp/sqlite-min
           echo "SQLITE_MIN_BINARY=/tmp/sqlite-min" >> "$GITHUB_ENV"
+      - name: Build SQLite 3.54 runtime
+        if: matrix.python-version == '3.11'
+        run: |
+          curl --fail --location https://www.sqlite.org/2026/sqlite-amalgamation-3540000.zip --output /tmp/sqlite-current.zip
+          unzip -q /tmp/sqlite-current.zip -d /tmp
+          cd /tmp/sqlite-amalgamation-3540000
+          cc -O2 -fPIC -shared sqlite3.c -lm -ldl -o libsqlite3.so.0
+          echo "LD_LIBRARY_PATH=/tmp/sqlite-amalgamation-3540000${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Verify SQLite 3.54 runtime
+        if: matrix.python-version == '3.11'
+        run: poetry run python -c "import sqlite3; assert sqlite3.sqlite_version == '3.54.0', sqlite3.sqlite_version"
       - name: Run tests
         run: poetry run pytest --cov=sigma --cov-report term --cov-report xml:cov.xml -vv
       - name: Store coverage for badge

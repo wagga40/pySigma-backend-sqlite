@@ -411,10 +411,7 @@ class sqliteBackend(TextQueryBackend):
     ):
         if not hasattr(self, "last_processing_pipeline"):
             self.init_processing_pipeline(output_format)
-        queries = super().convert_correlation_rule(
-            rule, output_format, method, callback
-        )
-        return queries if rule._output else []
+        return super().convert_correlation_rule(rule, output_format, method, callback)
 
     def convert_rule(self, rule, output_format=None, callback=None):
         queries = super().convert_rule(rule, output_format, callback)
