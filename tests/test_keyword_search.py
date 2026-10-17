@@ -1,13 +1,16 @@
 """Keyword SQL is exercised against SQLite, including correlation plans."""
 
 import json
-import re
 import sqlite3
 
 import pytest
 import yaml
+from helpers import regexp
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+from sigma.processing.conditions import LogsourceCondition
+from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
+from sigma.processing.transformations import SetStateTransformation
 
 from sigma.backends.sqlite import runtime, sqliteBackend
 
@@ -37,9 +40,7 @@ def database(values):
         "INSERT INTO logs VALUES (?, ?, ?, ?)",
         [(f"2024-01-01T00:00:{i:02d}", "h", 1, text) for i, text in enumerate(values)],
     )
-    connection.create_function(
-        "REGEXP", 2, lambda pattern, value: bool(re.search(pattern, value or ""))
-    )
+    connection.create_function("REGEXP", 2, regexp)
     return connection
 
 
@@ -237,10 +238,6 @@ def test_runtime_rejects_bad_fulltext_requirement_shapes():
 
 
 def test_multi_source_chained_correlation_inherits_keyword_table():
-    from sigma.processing.conditions import LogsourceCondition
-    from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
-    from sigma.processing.transformations import SetStateTransformation
-
     keyword = detection(["needle"], name="keyword")
     keyword["logsource"]["category"] = "first"
     other = detection({"EventID": 2}, name="other")

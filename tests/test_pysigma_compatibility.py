@@ -1,12 +1,12 @@
 """Exercise the pySigma contracts used by the backend without import shims."""
 
-import re
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from helpers import regexp
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaModifiedError, SigmaRegularExpressionError
 from sigma.policy.profiles import TrustedPolicy
@@ -45,9 +45,7 @@ def test_explicit_regex_policy_preserves_python_patterns(field):
     )
     query = sqliteBackend(fulltext_field="message").convert(collection)[0]
     with sqlite3.connect(":memory:") as connection:
-        connection.create_function(
-            "regexp", 2, lambda p, v: v is not None and re.search(p, v) is not None
-        )
+        connection.create_function("regexp", 2, regexp)
         connection.execute("CREATE TABLE logs(message TEXT)")
         connection.executemany(
             "INSERT INTO logs VALUES (?)", [("FOObar",), ("fooqux",), (None,)]

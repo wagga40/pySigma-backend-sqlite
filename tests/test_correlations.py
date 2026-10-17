@@ -7,89 +7,12 @@ import statistics
 
 import pytest
 import yaml
+from helpers import correlation, database, detection, event, execute
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite.runtime import execute_plan
-
-
-def detection(name="a", event=1):
-    return dict(
-        title=name,
-        name=name,
-        logsource={"category": "test"},
-        detection={"s": {"EventID": event}, "condition": "s"},
-    )
-
-
-def correlation(kind="event_count", refs=("a",), condition=None, name="corr", **extra):
-    c = dict(type=kind, rules=list(refs), timespan="5s", **{"group-by": ["Host"]})
-    if condition is not None:
-        c["condition"] = condition
-    elif not kind.startswith("temporal"):
-        c["condition"] = {"gte": 2}
-    c.update(extra)
-    return dict(title=name, name=name, correlation=c)
-
-
-def database(events):
-    con = sqlite3.connect(":memory:")
-    con.execute(
-        "CREATE TABLE logs (row_id INTEGER PRIMARY KEY, timestamp TEXT, Host TEXT COLLATE NOCASE, "
-        "EventID INTEGER, User TEXT, OtherUser TEXT, Bytes, event_count INTEGER, OriginalLogfile TEXT)"
-    )
-    for i, event in enumerate(events, 1):
-        row = dict(
-            row_id=i,
-            Host="h",
-            EventID=1,
-            User="u",
-            OtherUser="u",
-            Bytes=10,
-            event_count=0,
-            OriginalLogfile="input.json",
-            **{},
-        )
-        row.update(event)
-        con.execute(
-            "INSERT INTO logs ("
-            + ",".join("`" + k + "`" for k in row)
-            + ") VALUES ("
-            + ",".join("?" for _ in row)
-            + ")",
-            list(row.values()),
-        )
-    return con
-
-
-def event(t, **values):
-    return dict(timestamp=f"2024-01-01T00:00:{t:06.3f}", **values)
-
-
-def execute(docs, events, *, materialized=False, **options):
-    b = sqliteBackend(event_id_field="row_id", **options)
-    entries = json.loads(
-        b.convert(SigmaCollection.from_yaml(yaml.safe_dump_all(docs)), "zircolite")
-    )
-    entry = entries[-1]
-    con = database(events)
-    try:
-        if materialized:
-            rows, diagnostics = execute_plan(con, entry["correlation_plan"])
-            assert not con.execute(
-                "SELECT name FROM sqlite_temp_master WHERE type='table'"
-            ).fetchall()
-            return rows
-        cursor = con.execute(entry["rule"][0])
-        keys = [d[0] for d in cursor.description]
-        rows = [dict(zip(keys, r)) for r in cursor]
-        for row in rows:
-            for key in ("group_keys", "event_ids", "child_alert_ids"):
-                row[key] = json.loads(row[key])
-        return rows
-    finally:
-        con.close()
 
 
 @pytest.mark.parametrize("materialized", [False, True])
