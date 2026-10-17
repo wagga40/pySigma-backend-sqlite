@@ -559,25 +559,26 @@ class CorrelationCompiler:
                 "0 AS metric, '[]' AS evidence, '[]' AS children WHERE 0"
             ]
         combined = self.add(stem + "_combined", " UNION ".join(results))
-        # OR branches may describe the same occurrence with different evidence.
-        # Read the combined relation once: repeated references expand the CTE
-        # graph enough to hit SQLite 3.54's cursor limit in chained correlations.
-        # Tag the two arrays instead of joining their elements to each other.
-        # The LEFT JOIN keeps windows whose evidence or children are empty.
+        # OR branches may describe the same occurrence with different evidence:
+        # merge it into one alert per window. Reading the combined relation
+        # once keeps chained CTEs under SQLite's subquery nesting limit, and
+        # flattening per window avoids materializing a row per event ID.
         keys = ", ".join(["start", "end"] + gs)
-        expanded = self.add(
-            stem + "_expanded",
-            f'SELECT {", ".join("c." + k for k in ["start", "end"] + gs)}, '
-            f"c.metric, a.key AS kind, e.value AS item FROM {combined} c "
-            "JOIN json_each(json_array(json(c.evidence), json(c.children))) a "
-            "LEFT JOIN json_each(a.value) e ON 1",
+        grouped = self.add(
+            stem + "_grouped",
+            f"SELECT {keys}, MAX(metric) AS metric, "
+            "json_group_array(json(evidence)) AS evidence, "
+            "json_group_array(json(children)) AS children "
+            f"FROM {combined} GROUP BY {keys}",
         )
+        merged = [
+            "(SELECT json_group_array(value) FROM (SELECT DISTINCT e.value "
+            f"FROM json_each(w.{column}) a, json_each(a.value) e ORDER BY e.value)) AS {column}"
+            for column in ("evidence", "children")
+        ]
         combined = self.add(
             stem + "_merged",
-            f"SELECT {keys}, MAX(metric) AS metric, "
-            "json_group_array(DISTINCT item) FILTER (WHERE kind=0 AND item IS NOT NULL) AS evidence, "
-            "json_group_array(DISTINCT item) FILTER (WHERE kind=1 AND item IS NOT NULL) AS children "
-            f"FROM (SELECT * FROM {expanded} ORDER BY {keys}, kind, item) GROUP BY {keys}",
+            f'SELECT {keys}, metric, {", ".join(merged)} FROM {grouped} w',
         )
         group_json = json_object([(f, quote(g)) for f, g in zip(group, gs)])
         payload = json_object(
