@@ -7,11 +7,11 @@ finalized query or output-format dictionary is ever used as a predicate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import itertools
 import json
 import math
+from dataclasses import dataclass
 
 from sigma.correlations import (
     CorrelationConditionAND,
@@ -294,7 +294,7 @@ class CorrelationCompiler:
         if not isinstance(rule, SigmaCorrelationRule):
             raw = self.raw[id(rule)][0]
             columns = "".join(
-                f', {group_key(self._field("payload", field))} AS g{i}'
+                f", {group_key(self._field('payload', field))} AS g{i}"
                 for i, field in enumerate(fields)
             )
             return [f"SELECT eid, ts{columns} FROM {raw}"]
@@ -450,10 +450,10 @@ class CorrelationCompiler:
                     f"WHERE end > (SELECT ts FROM {self.horizon})"
                 )
             predicate = self.window("m", "a", count)
-            presence = lambda s: (
-                f"EXISTS (SELECT 1 FROM {matches} m WHERE {predicate} "
-                f"AND m.slot={s})"
-            )
+
+            def presence(slot):
+                return f"EXISTS (SELECT 1 FROM {matches} m WHERE {predicate} AND m.slot={slot})"
+
             conditions = [presence(s) for s in pos] + [
                 f"NOT {presence(s)}" for s in neg
             ]
@@ -470,7 +470,7 @@ class CorrelationCompiler:
             if ordered:
                 for si, slot in enumerate(slots):
                     previous = (
-                        f'COALESCE({", ".join(reversed(times))})'
+                        f"COALESCE({', '.join(reversed(times))})"
                         if len(times) > 1
                         else (times[0] if times else "NULL")
                     )
@@ -498,7 +498,7 @@ class CorrelationCompiler:
             elif window_metrics:
                 metric = (
                     f"(SELECT m.metric FROM {window_metrics} m WHERE "
-                    f'{self.group_equal("m", "a", count)}m.end=a.end)'
+                    f"{self.group_equal('m', 'a', count)}m.end=a.end)"
                 )
             elif kind == "value_count":
                 aggregate = "COUNT(DISTINCT m.v COLLATE NOCASE)"
@@ -562,7 +562,7 @@ class CorrelationCompiler:
             if forward and not pos:
                 evidence = (
                     f"(SELECT json_group_array(DISTINCT m.eid) FROM {anchor_source} m "
-                    f'WHERE {self.group_equal("m", "a", count)}m.ts=a.start)'
+                    f"WHERE {self.group_equal('m', 'a', count)}m.ts=a.start)"
                 )
             results.append(
                 f"SELECT a.start, a.end{comma_groups}, a.metric, {evidence} AS evidence, "
@@ -593,7 +593,7 @@ class CorrelationCompiler:
         ]
         combined = self.add(
             stem + "_merged",
-            f'SELECT {keys}, metric, {", ".join(merged)} FROM {grouped} w',
+            f"SELECT {keys}, metric, {', '.join(merged)} FROM {grouped} w",
         )
         group_json = json_object([(f, quote(g)) for f, g in zip(group, gs)])
         payload = json_object(

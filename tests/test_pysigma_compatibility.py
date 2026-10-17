@@ -1,16 +1,17 @@
 """Exercise the pySigma contracts used by the backend without import shims."""
 
-from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-from sigma.backends.sqlite import sqliteBackend
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaModifiedError, SigmaRegularExpressionError
 from sigma.policy.profiles import TrustedPolicy
+
+from sigma.backends.sqlite import sqliteBackend
 
 
 def rule(selection):

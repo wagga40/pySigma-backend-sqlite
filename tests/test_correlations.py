@@ -7,10 +7,11 @@ import statistics
 
 import pytest
 import yaml
-from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite.runtime import execute_plan
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+
+from sigma.backends.sqlite import sqliteBackend
+from sigma.backends.sqlite.runtime import execute_plan
 
 
 def detection(name="a", event=1):
@@ -353,9 +354,7 @@ def test_multi_field_value_count_is_reported_as_unsupported():
 
 
 def test_collect_errors_skips_only_failing_correlations():
-    keyword = dict(
-        detection("search"), detection={"k": ["needle"], "condition": "k"}
-    )
+    keyword = dict(detection("search"), detection={"k": ["needle"], "condition": "k"})
     multi = correlation(
         "value_count", condition={"gte": 2, "field": ["User", "OtherUser"]}
     )
@@ -367,9 +366,7 @@ def test_collect_errors_skips_only_failing_correlations():
         correlation(name="kept"),
     ]
     backend = sqliteBackend(collect_errors=True)
-    entries = json.loads(
-        backend.convert(SigmaCollection.from_dicts(docs), "zircolite")
-    )
+    entries = json.loads(backend.convert(SigmaCollection.from_dicts(docs), "zircolite"))
     assert [entry["title"] for entry in entries] == ["kept"]
     assert sorted(rule.title for rule, _ in backend.errors) == [
         "multi",

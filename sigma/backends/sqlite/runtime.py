@@ -8,7 +8,6 @@ import sqlite3
 
 from .correlation import quote
 
-
 _TABLE_NAME = re.compile(
     r"(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`)(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`))*\Z"
 )
@@ -101,7 +100,7 @@ def execute_plan(
     try:
         for table in plan["source_tables"].values():
             connection.execute(
-                f'SELECT {quote(plan["event_id_field"])} FROM {table} LIMIT 0'
+                f"SELECT {quote(plan['event_id_field'])} FROM {table} LIMIT 0"
             ).close()
         ensure_fields(connection, plan["required_fields"])
         for stage in plan["prepare"]:
@@ -110,13 +109,13 @@ def execute_plan(
                 raise ValueError("Invalid correlation relation name")
             # Never drop or overwrite a consumer's pre-existing temporary table.
             connection.execute(
-                f'CREATE TEMP TABLE {quote(name)} AS {stage["select"]}'
+                f"CREATE TEMP TABLE {quote(name)} AS {stage['select']}"
             ).close()
             created.append(name)
             for i, columns in enumerate(stage["indexes"]):
                 connection.execute(
-                    f'CREATE INDEX temp.{quote(name + "_i" + str(i))} '
-                    f'ON {quote(name)} ({", ".join(map(quote, columns))})'
+                    f"CREATE INDEX temp.{quote(name + '_i' + str(i))} "
+                    f"ON {quote(name)} ({', '.join(map(quote, columns))})"
                 ).close()
         diagnostics = {}
         if plan["diagnostics"]:

@@ -1,41 +1,40 @@
+import json
+import math
+import re
+from typing import Any, ClassVar
+
+from sigma.conditions import (
+    ConditionAND,
+    ConditionFieldEqualsValueExpression,
+    ConditionItem,
+    ConditionNOT,
+    ConditionOR,
+    ConditionValueExpression,
+)
+from sigma.conversion.base import TextQueryBackend
 from sigma.conversion.deferred import DeferredQueryExpression
 from sigma.conversion.state import ConversionState
-from sigma.rule import SigmaRule
-from sigma.conversion.base import TextQueryBackend
-from sigma.conditions import (
-    ConditionItem,
-    ConditionAND,
-    ConditionOR,
-    ConditionNOT,
-    ConditionValueExpression,
-    ConditionFieldEqualsValueExpression,
-)
-from sigma.types import (
-    SigmaBool,
-    SigmaCasedString,
-    SigmaCompareExpression,
-    SigmaExpansion,
-    SigmaNumber,
-    SigmaRegularExpression,
-    SigmaString,
-    SpecialChars,
-    SigmaCIDRExpression,
-    SigmaFieldReference,
-    TimestampPart,
-)
-from sigma.exceptions import SigmaError, SigmaFeatureNotSupportedByBackendError
 from sigma.correlations import (
     SigmaCorrelationConditionOperator,
     SigmaCorrelationRule,
 )
+from sigma.exceptions import SigmaError, SigmaFeatureNotSupportedByBackendError
+from sigma.rule import SigmaRule
+from sigma.types import (
+    SigmaBool,
+    SigmaCasedString,
+    SigmaCIDRExpression,
+    SigmaCompareExpression,
+    SigmaExpansion,
+    SigmaFieldReference,
+    SigmaNumber,
+    SigmaRegularExpression,
+    SigmaString,
+    SpecialChars,
+    TimestampPart,
+)
 
 from .correlation import CorrelationCompiler, numeric, quote
-
-import re
-import json
-import math
-from typing import ClassVar, Dict, List, Optional, Tuple, Union, Any
-
 
 _SQLITE_KEYWORDS = set(
     "ABORT ACTION ADD AFTER ALL ALTER ALWAYS ANALYZE AND AS ASC ATTACH AUTOINCREMENT BEFORE BEGIN BETWEEN BY CASCADE CASE CAST CHECK COLLATE COLUMN COMMIT CONFLICT CONSTRAINT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP DATABASE DEFAULT DEFERRABLE DEFERRED DELETE DESC DETACH DISTINCT DO DROP EACH ELSE END ESCAPE EXCEPT EXCLUDE EXCLUSIVE EXISTS EXPLAIN FAIL FILTER FIRST FOLLOWING FOR FOREIGN FROM FULL GENERATED GLOB GROUP GROUPS HAVING IF IGNORE IMMEDIATE IN INDEX INDEXED INITIALLY INNER INSERT INSTEAD INTERSECT INTO IS ISNULL JOIN KEY LAST LEFT LIKE LIMIT MATCH MATERIALIZED NATURAL NO NOT NOTHING NOTNULL NULL NULLS OF OFFSET ON OR ORDER OTHERS OUTER OVER PARTITION PLAN PRAGMA PRECEDING PRIMARY QUERY RAISE RANGE RECURSIVE REFERENCES REGEXP REINDEX RELEASE RENAME REPLACE RESTRICT RETURNING RIGHT ROLLBACK ROW ROWS SAVEPOINT SELECT SET TABLE TEMP TEMPORARY THEN TIES TO TRANSACTION TRIGGER UNBOUNDED UNION UNIQUE UPDATE USING VACUUM VALUES VIEW VIRTUAL WHEN WHERE WINDOW WITH WITHOUT".split()
@@ -47,19 +46,19 @@ class sqliteBackend(TextQueryBackend):
 
     identifier: ClassVar[str] = "sqlite"
     name: ClassVar[str] = "SQLite backend"
-    formats: ClassVar[Dict[str, str]] = {
+    formats: ClassVar[dict[str, str]] = {
         "default": "Plain SQLite queries",
         "zircolite": "Zircolite JSON format",
     }
     requires_pipeline: ClassVar[bool] = False
 
     # Correlation support
-    correlation_methods: ClassVar[Dict[str, str]] = {
+    correlation_methods: ClassVar[dict[str, str]] = {
         "default": "Default SQLite correlation using subqueries and window functions",
     }
 
     # Operator precedence, highest first; the backend adds grouping where required.
-    precedence: ClassVar[Tuple[ConditionItem, ConditionItem, ConditionItem]] = (
+    precedence: ClassVar[tuple[ConditionItem, ConditionItem, ConditionItem]] = (
         ConditionNOT,
         ConditionAND,
         ConditionOR,
@@ -101,7 +100,7 @@ class sqliteBackend(TextQueryBackend):
     wildcard_glob_single: ClassVar[str] = "?"  # Character used as glob wildcard
     # Literal GLOB metacharacters, written as single-member character classes. Order matters:
     # "[" is escaped first so the brackets introduced by the other two are not escaped again.
-    glob_escaped_chars: ClassVar[Dict[str, str]] = {"[": "[[]", "*": "[*]", "?": "[?]"}
+    glob_escaped_chars: ClassVar[dict[str, str]] = {"[": "[[]", "*": "[*]", "?": "[?]"}
     # Sentinels standing in for Sigma wildcards while literals are escaped. NUL cannot occur in
     # a SQLite string literal, so these cannot collide with rule content.
     glob_wildcard_multi_placeholder: ClassVar[str] = "\x00\x01"
@@ -115,13 +114,13 @@ class sqliteBackend(TextQueryBackend):
     # is as likely to hold 1/0 -- and SQLite reads the bare keyword `true` as the integer 1,
     # which never equals the text 'true'. Accepting both is the only form that is right against
     # either table; see convert_condition_field_eq_val_bool.
-    bool_values: ClassVar[Dict[bool, str]] = (
-        {  # Values to which boolean values are mapped.
-            True: "'true'",
-            False: "'false'",
-        }
-    )
-    bool_numeric_values: ClassVar[Dict[bool, str]] = {True: "1", False: "0"}
+    bool_values: ClassVar[
+        dict[bool, str]
+    ] = {  # Values to which boolean values are mapped.
+        True: "'true'",
+        False: "'false'",
+    }
+    bool_numeric_values: ClassVar[dict[bool, str]] = {True: "1", False: "0"}
     bool_expression: ClassVar[str] = "({field}={value} OR {field}={numeric_value})"
 
     # String matching operators. if none is appropriate eq_token is used.
@@ -143,11 +142,9 @@ class sqliteBackend(TextQueryBackend):
     re_escape_char: ClassVar[str] = (
         ""  # Character used for escaping in regular expressions
     )
-    re_escape: ClassVar[Tuple[str]] = ()  # List of strings that are escaped
+    re_escape: ClassVar[tuple[str]] = ()  # List of strings that are escaped
     re_escape_escape_char: bool = True  # If True, the escape character is also escaped
-    re_flag_prefix: bool = (
-        True  # If True, the flags are prepended as (?x) group at the beginning of the regular expression, e.g. (?i). If this is not supported by the target, it should be set to False.
-    )
+    re_flag_prefix: bool = True  # If True, the flags are prepended as (?x) group at the beginning of the regular expression, e.g. (?i). If this is not supported by the target, it should be set to False.
 
     # SQLite's GLOB is a 2-argument operator with no ESCAPE clause (unlike LIKE);
     # emitting "ESCAPE '\'" triggers "wrong number of arguments to function GLOB()" at runtime.
@@ -161,7 +158,7 @@ class sqliteBackend(TextQueryBackend):
         "{field} {operator} {value}"  # Compare operation query as format string with placeholders {field}, {operator} and {value}
     )
     # Mapping between CompareOperators elements and strings used as replacement for {operator} in compare_op_expression
-    compare_operators: ClassVar[Dict[SigmaCompareExpression.CompareOperators, str]] = {
+    compare_operators: ClassVar[dict[SigmaCompareExpression.CompareOperators, str]] = {
         SigmaCompareExpression.CompareOperators.LT: "<",
         SigmaCompareExpression.CompareOperators.LTE: "<=",
         SigmaCompareExpression.CompareOperators.GT: ">",
@@ -169,7 +166,7 @@ class sqliteBackend(TextQueryBackend):
     }
 
     # Expression for comparing two event fields (fieldref modifier)
-    field_equals_field_expression: ClassVar[Optional[str]] = "{field1}={field2}"
+    field_equals_field_expression: ClassVar[str | None] = "{field1}={field2}"
     # |fieldref compares two fields, so the pattern side is event data rather than rule text:
     # a "%" or "_" that happens to occur in it would otherwise act as a LIKE wildcard and match
     # far more than the rule asks for. The backslash is escaped first so the two escapes the
@@ -177,25 +174,25 @@ class sqliteBackend(TextQueryBackend):
     field_ref_like_escape: ClassVar[str] = (
         "REPLACE(REPLACE(REPLACE({field2}, '\\', '\\\\'), '%', '\\%'), '_', '\\_')"
     )
-    field_equals_field_startswith_expression: ClassVar[Optional[str]] = (
+    field_equals_field_startswith_expression: ClassVar[str | None] = (
         "{field1} LIKE " + field_ref_like_escape + " || '%' ESCAPE '\\'"
     )
-    field_equals_field_endswith_expression: ClassVar[Optional[str]] = (
+    field_equals_field_endswith_expression: ClassVar[str | None] = (
         "{field1} LIKE '%' || " + field_ref_like_escape + " ESCAPE '\\'"
     )
-    field_equals_field_contains_expression: ClassVar[Optional[str]] = (
+    field_equals_field_contains_expression: ClassVar[str | None] = (
         "{field1} LIKE '%' || " + field_ref_like_escape + " || '%' ESCAPE '\\'"
     )
-    field_equals_field_escaping_quoting: Tuple[bool, bool] = (
+    field_equals_field_escaping_quoting: tuple[bool, bool] = (
         True,
         True,
     )  # If regular field-escaping/quoting is applied to field1 and field2.
 
     # Timestamp part expressions for time modifiers (|minute, |hour, |day, etc.)
-    field_timestamp_part_expression: ClassVar[Optional[str]] = (
+    field_timestamp_part_expression: ClassVar[str | None] = (
         "CAST(strftime('{timestamp_part}', {field}) AS INTEGER)"
     )
-    timestamp_part_mapping: ClassVar[Optional[Dict[TimestampPart, str]]] = {
+    timestamp_part_mapping: ClassVar[dict[TimestampPart, str] | None] = {
         TimestampPart.MINUTE: "%M",
         TimestampPart.HOUR: "%H",
         TimestampPart.DAY: "%d",
@@ -267,7 +264,7 @@ class sqliteBackend(TextQueryBackend):
     event_id_field = "rowid"
     timestamp_format = "iso"
     observation_end = None
-    fulltext_field: Optional[str] = None
+    fulltext_field: str | None = None
     timestamp_seconds_expression = (
         "ROUND((julianday({field}) - 2440587.5) * 86400000) / 1000.0"
     )
@@ -458,7 +455,7 @@ class sqliteBackend(TextQueryBackend):
         self._correlation_plans[id(rule)] = plan
         return [query]
 
-    def _join_operands(self, args: List[str], joiner: str) -> str:
+    def _join_operands(self, args: list[str], joiner: str) -> str:
         """Join boolean operands, regrouping long chains to stay under SQLite's depth limit.
 
         Below `max_flat_operands` nothing is regrouped, so ordinary queries are byte-identical
@@ -478,11 +475,11 @@ class sqliteBackend(TextQueryBackend):
 
     def _convert_condition_boolean(
         self,
-        cond: Union[ConditionAND, ConditionOR],
+        cond: ConditionAND | ConditionOR,
         state: ConversionState,
         token: str,
-        empty_expression: Optional[str],
-    ) -> Union[str, DeferredQueryExpression, None]:
+        empty_expression: str | None,
+    ) -> str | DeferredQueryExpression | None:
         """Shared body of convert_condition_and/or, differing from pySigma only in the join."""
         # don't repeat the same thing triple times if separator equals the operator token
         joiner = (
@@ -509,7 +506,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_or(
         self, cond: ConditionOR, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression, None]:
+    ) -> str | DeferredQueryExpression | None:
         """Conversion of OR conditions."""
         try:
             return self._convert_condition_boolean(
@@ -520,7 +517,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_and(
         self, cond: ConditionAND, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression, None]:
+    ) -> str | DeferredQueryExpression | None:
         """Conversion of AND conditions."""
         try:
             return self._convert_condition_boolean(
@@ -531,7 +528,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_not(
         self, cond: ConditionNOT, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression, None]:
+    ) -> str | DeferredQueryExpression | None:
         """Conversion of NOT conditions, folding SQLite's three-valued logic back to Sigma's two.
 
         Sigma reads a condition on a field the event does not carry as false, so
@@ -624,7 +621,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_field_eq_val_bool(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Conversion of field = boolean value expressions, matching text and numeric storage."""
         if not isinstance(cond.value, SigmaBool):  # pragma: no cover - defensive
             raise TypeError(
@@ -644,7 +641,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_field_eq_val_str(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Conversion of field = string value expressions.
 
         Follows pySigma's own cascade; the backend reimplements it because its LIKE templates
@@ -667,9 +664,7 @@ class sqliteBackend(TextQueryBackend):
                     or not cond.value[:-1].contains_special()
                 )  # Remainder of string doesn't contains special characters or it's allowed
             ):
-                expr = (
-                    self.startswith_expression
-                )  # If all conditions are fulfilled, use 'startswith' operartor instead of equal token
+                expr = self.startswith_expression  # If all conditions are fulfilled, use 'startswith' operartor instead of equal token
                 value = cond.value[:-1]
             elif (  # Same as above but for 'endswith' operator: string starts with wildcard and doesn't contains further special characters
                 self.endswith_expression is not None
@@ -727,7 +722,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_field_eq_val_str_case_sensitive(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Case-sensitive matching via GLOB with literal backslashes (no ESCAPE clause)."""
         try:
             if (  # Check conditions for usage of 'startswith' operator
@@ -741,9 +736,7 @@ class sqliteBackend(TextQueryBackend):
                     or not cond.value[:-1].contains_special()
                 )  # Remainder of string doesn't contains special characters or it's allowed
             ):
-                expr = (
-                    self.case_sensitive_startswith_expression
-                )  # If all conditions are fulfilled, use 'startswith' operator instead of equal token
+                expr = self.case_sensitive_startswith_expression  # If all conditions are fulfilled, use 'startswith' operator instead of equal token
                 value = cond.value[:-1]
             elif (  # Same as above but for 'endswith' operator: string starts with wildcard and doesn't contains further special characters
                 self.case_sensitive_endswith_expression is not None
@@ -799,7 +792,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_field_eq_val_cidr(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Conversion of field matches CIDR value expressions."""
         cidr: SigmaCIDRExpression = cond.value
         expanded_cond = ConditionOR(
@@ -813,7 +806,7 @@ class sqliteBackend(TextQueryBackend):
 
     def finalize_query_default(
         self,
-        rule: Union[SigmaRule, SigmaCorrelationRule],
+        rule: SigmaRule | SigmaCorrelationRule,
         query: str,
         index: int,
         state: ConversionState,
@@ -829,7 +822,7 @@ class sqliteBackend(TextQueryBackend):
 
         return sqlite_query
 
-    def _field_value_bound(self, cond: Any, field_name_lower: str) -> Optional[set]:
+    def _field_value_bound(self, cond: Any, field_name_lower: str) -> set | None:
         """The values `field_name_lower` may take for `cond` to match, or None when unbounded.
 
         Zircolite uses the `channel` and `eventid` keys of a rule as an allow-list to skip
@@ -881,7 +874,7 @@ class sqliteBackend(TextQueryBackend):
 
     def _extract_field_values_from_rule(
         self, rule: SigmaRule, field_name: str, index: int = 0
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Values of `field_name` that the rule's condition provably requires, sorted.
 
         An empty list means "no provable bound" and leaves the field unfiltered downstream.
@@ -897,7 +890,7 @@ class sqliteBackend(TextQueryBackend):
 
     def finalize_query_zircolite(
         self,
-        rule: Union[SigmaRule, SigmaCorrelationRule],
+        rule: SigmaRule | SigmaCorrelationRule,
         query: str,
         index: int,
         state: ConversionState,
@@ -960,7 +953,7 @@ class sqliteBackend(TextQueryBackend):
         zircolite_rule["schema_version"] = 3 if fulltext else 2
         return zircolite_rule
 
-    def finalize_output_zircolite(self, queries: List[Dict]) -> str:
+    def finalize_output_zircolite(self, queries: list[dict]) -> str:
         return json.dumps(list(queries))
 
     def _fulltext_column(self):
@@ -974,7 +967,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_val(
         self, cond: ConditionValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Also OR the values of keyword expansions (|windash, |base64offset)."""
         if isinstance(cond.value, SigmaExpansion):
             return self.convert_condition_or(
@@ -988,7 +981,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_val_str(
         self, cond: ConditionValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Match a Sigma string anywhere in the captured source values."""
         field = self._fulltext_column()
         cased = isinstance(cond.value, SigmaCasedString)
@@ -1001,7 +994,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_val_num(
         self, cond: ConditionValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         """Match a number's source spelling as text."""
         field = self._fulltext_column()
         value = (
@@ -1015,7 +1008,7 @@ class sqliteBackend(TextQueryBackend):
 
     def convert_condition_val_re(
         self, cond: ConditionValueExpression, state: ConversionState
-    ) -> Union[str, DeferredQueryExpression]:
+    ) -> str | DeferredQueryExpression:
         field = self._fulltext_column()
         regex = self.convert_value_re(cond.value, state)
         flags = self.get_flag_template(cond.value)

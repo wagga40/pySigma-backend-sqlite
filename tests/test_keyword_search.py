@@ -8,8 +8,8 @@ import pytest
 import yaml
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
-from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite import runtime
+
+from sigma.backends.sqlite import runtime, sqliteBackend
 
 
 def convert(docs, *, field="_sigma_fulltext", **options):
@@ -237,8 +237,8 @@ def test_runtime_rejects_bad_fulltext_requirement_shapes():
 
 
 def test_multi_source_chained_correlation_inherits_keyword_table():
-    from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
     from sigma.processing.conditions import LogsourceCondition
+    from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
     from sigma.processing.transformations import SetStateTransformation
 
     keyword = detection(["needle"], name="keyword")

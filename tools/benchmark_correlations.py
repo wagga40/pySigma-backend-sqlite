@@ -2,15 +2,16 @@
 
 import argparse
 import json
-from pathlib import Path
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from sigma.collection import SigmaCollection
+
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite.runtime import execute_plan
-from sigma.collection import SigmaCollection
 
 
 def benchmark(size, kind, dense, timeout):

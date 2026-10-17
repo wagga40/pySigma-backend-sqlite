@@ -2,14 +2,15 @@
 
 import json
 import os
-from pathlib import Path
 import runpy
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
-from sigma.backends.sqlite import sqliteBackend
 from sigma.collection import SigmaCollection
+
+from sigma.backends.sqlite import sqliteBackend
 
 sqlite_cli = os.environ.get("SQLITE_MIN_BINARY")
 pytestmark = pytest.mark.skipif(
@@ -30,9 +31,9 @@ def execute_minimum(docs, events, materialized):
     if materialized:
         plan = entry["correlation_plan"]
         for stage in plan["prepare"]:
-            script += f'CREATE TEMP TABLE {stage["name"]} AS {stage["select"]};\n'
+            script += f"CREATE TEMP TABLE {stage['name']} AS {stage['select']};\n"
             for i, columns in enumerate(stage["indexes"]):
-                script += f'CREATE INDEX {stage["name"]}_i{i} ON {stage["name"]} ({",".join(columns)});\n'
+                script += f"CREATE INDEX {stage['name']}_i{i} ON {stage['name']} ({','.join(columns)});\n"
         script += plan["query"] + ";"
     else:
         script += entry["rule"][0] + ";"
@@ -210,9 +211,9 @@ def test_minimum_sqlite_executes_keyword_correlation(materialized):
     )
     if materialized:
         for stage in plan["prepare"]:
-            script += f'CREATE TEMP TABLE {stage["name"]} AS {stage["select"]};\n'
+            script += f"CREATE TEMP TABLE {stage['name']} AS {stage['select']};\n"
             for i, columns in enumerate(stage["indexes"]):
-                script += f'CREATE INDEX {stage["name"]}_i{i} ON {stage["name"]} ({",".join(columns)});\n'
+                script += f"CREATE INDEX {stage['name']}_i{i} ON {stage['name']} ({','.join(columns)});\n"
         script += plan["query"] + ";"
     else:
         script += entry["rule"][0] + ";"

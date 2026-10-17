@@ -5,19 +5,19 @@ field requirements, not a SQL scanner or a consumer's accidental event schema.
 """
 
 import argparse
-from collections import Counter
 import json
-from pathlib import Path
 import re
 import sqlite3
 import sys
+from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite.runtime import ensure_fields, execute_plan
 from sigma.collection import SigmaCollection
 from sigma.correlations import SigmaCorrelationRule
 
+from sigma.backends.sqlite import sqliteBackend
+from sigma.backends.sqlite.runtime import ensure_fields, execute_plan
 
 KEYWORD_GAP = "Keyword search requires fulltext_field"
 

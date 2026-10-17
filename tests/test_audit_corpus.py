@@ -1,10 +1,9 @@
 """The corpus auditor must provision the same prerequisites as a consumer."""
 
-from pathlib import Path
 import importlib.util
+from pathlib import Path
 
 import yaml
-
 
 spec = importlib.util.spec_from_file_location(
     "audit_corpus", Path(__file__).parents[1] / "tools" / "audit_corpus.py"
