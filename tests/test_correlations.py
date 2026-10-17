@@ -352,6 +352,38 @@ def test_multi_field_value_count_is_reported_as_unsupported():
         sqliteBackend().convert(c)
 
 
+def test_collect_errors_skips_only_failing_correlations():
+    keyword = dict(
+        detection("search"), detection={"k": ["needle"], "condition": "k"}
+    )
+    multi = correlation(
+        "value_count", condition={"gte": 2, "field": ["User", "OtherUser"]}
+    )
+    docs = [
+        detection(),
+        keyword,
+        dict(multi, title="multi", name="multi"),
+        correlation(refs=("search",), name="searched"),
+        correlation(name="kept"),
+    ]
+    backend = sqliteBackend(collect_errors=True)
+    entries = json.loads(
+        backend.convert(SigmaCollection.from_dicts(docs), "zircolite")
+    )
+    assert [entry["title"] for entry in entries] == ["kept"]
+    assert sorted(rule.title for rule, _ in backend.errors) == [
+        "multi",
+        "search",
+        "searched",
+    ]
+
+
+@pytest.mark.parametrize("value", ["soon", float("inf"), float("nan")])
+def test_observation_end_is_validated_at_construction(value):
+    with pytest.raises(ValueError, match="observation_end"):
+        sqliteBackend(observation_end=value)
+
+
 def test_required_fields_and_runtime_cleanup_on_failure():
     c = SigmaCollection.from_yaml(yaml.safe_dump_all([detection(), correlation()]))
     entry = json.loads(sqliteBackend().convert(c, "zircolite"))[0]

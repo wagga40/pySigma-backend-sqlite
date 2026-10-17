@@ -20,7 +20,12 @@ from sigma.correlations import (
     SigmaExtendedCorrelationCondition,
     SigmaRuleReference,
 )
-from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+from sigma.exceptions import (
+    SigmaCorrelationConditionError,
+    SigmaCorrelationRuleError,
+    SigmaFeatureNotSupportedByBackendError,
+    SigmaTimespanError,
+)
 
 
 def literal(value: str) -> str:
@@ -138,7 +143,9 @@ class CorrelationCompiler:
 
     def _discover(self, rule):
         if id(rule) in self.active:
-            raise ValueError("Cyclic correlation references are not supported")
+            raise SigmaCorrelationRuleError(
+                f"Correlation {rule.title!r} has cyclic references", source=rule.source
+            )
         self.active.add(id(rule))
         if isinstance(rule, SigmaCorrelationRule):
             self.fields.update(rule.group_by or [])
@@ -218,7 +225,11 @@ class CorrelationCompiler:
             for j, rule in enumerate(rules):
                 queries = rule.get_conversion_result()
                 if not queries or any(not isinstance(q, str) for q in queries):
-                    raise ValueError("Referenced detection has no compiled predicates")
+                    raise SigmaCorrelationRuleError(
+                        f"Correlation {self.root.title!r} references {rule.title!r}, "
+                        "which has no compiled predicates",
+                        source=self.root.source,
+                    )
                 predicate = self.backend._join_operands(
                     [f"({q})" for q in queries], " OR "
                 )
@@ -239,8 +250,6 @@ class CorrelationCompiler:
             )
         horizon = self.backend.observation_end
         if horizon is not None:
-            if not math.isfinite(float(horizon)):
-                raise ValueError("observation_end must be finite Unix seconds")
             expr = str(float(horizon))
         else:
             sources = sorted({v[0] for v in self.raw.values()})
@@ -357,7 +366,10 @@ class CorrelationCompiler:
         )
         span = rule.timespan.seconds
         if span <= 0:
-            raise ValueError("Correlation timespan must be positive")
+            raise SigmaTimespanError(
+                f"Correlation {rule.title!r} needs a positive timespan",
+                source=rule.source,
+            )
         window_metrics = None
         if kind in ("event_count", "value_sum", "value_avg"):
             partition = "PARTITION BY " + ", ".join(gs) + " " if gs else ""
@@ -494,7 +506,10 @@ class CorrelationCompiler:
             elif kind in ("value_median", "value_percentile"):
                 p = 50 if kind == "value_median" else rule.condition.percentile
                 if p is None or not 0 <= p <= 100:
-                    raise ValueError("percentile must be between 0 and 100")
+                    raise SigmaCorrelationConditionError(
+                        f"Correlation {rule.title!r} needs a percentile between 0 and 100",
+                        source=rule.source,
+                    )
                 rank = (
                     f"SELECT m.v, ROW_NUMBER() OVER (ORDER BY m.v) - 1 AS r, "
                     f"COUNT(*) OVER () AS n FROM {events} m WHERE {predicate} AND m.v IS NOT NULL"

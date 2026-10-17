@@ -23,7 +23,7 @@ from sigma.types import (
     SigmaFieldReference,
     TimestampPart,
 )
-from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+from sigma.exceptions import SigmaError, SigmaFeatureNotSupportedByBackendError
 from sigma.correlations import (
     SigmaCorrelationConditionOperator,
     SigmaCorrelationRule,
@@ -33,6 +33,7 @@ from .correlation import CorrelationCompiler, numeric, quote
 
 import re
 import json
+import math
 from typing import ClassVar, Dict, List, Optional, Tuple, Union, Any
 
 
@@ -312,6 +313,13 @@ class sqliteBackend(TextQueryBackend):
                 self.timestamp_format
             ]
             self.timestamp_seconds_expression = f"({numeric('{field}')}) / {divisor}.0"
+        if self.observation_end is not None:
+            try:
+                finite = math.isfinite(float(self.observation_end))
+            except (TypeError, ValueError):
+                finite = False
+            if not finite:
+                raise ValueError("observation_end must be finite Unix seconds")
         self._correlation_plans = {}
         if self.fulltext_field is not None and (
             not isinstance(self.fulltext_field, str) or not self.fulltext_field
@@ -411,7 +419,16 @@ class sqliteBackend(TextQueryBackend):
     ):
         if not hasattr(self, "last_processing_pipeline"):
             self.init_processing_pipeline(output_format)
-        return super().convert_correlation_rule(rule, output_format, method, callback)
+        # pySigma collects errors for detection rules only.
+        try:
+            return super().convert_correlation_rule(
+                rule, output_format, method, callback
+            )
+        except SigmaError as e:
+            if not self.collect_errors:
+                raise
+            self.errors.append((rule, e))
+            return []
 
     def convert_rule(self, rule, output_format=None, callback=None):
         queries = super().convert_rule(rule, output_format, callback)
