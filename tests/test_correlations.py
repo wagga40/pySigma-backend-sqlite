@@ -397,6 +397,32 @@ def test_required_fields_and_runtime_cleanup_on_failure():
     con.close()
 
 
+@pytest.mark.parametrize(
+    "change, options, error",
+    [
+        ({"version": 1}, {}, "plan version"),
+        ({"prepare": [{"name": "logs", "select": "SELECT 1"}]}, {}, "relation name"),
+        ({}, {"limit": -1}, "limit must be nonnegative"),
+    ],
+)
+def test_execute_plan_rejects_invalid_input(change, options, error):
+    c = SigmaCollection.from_dicts([detection(), correlation()])
+    plan = json.loads(sqliteBackend().convert(c, "zircolite"))[0]["correlation_plan"]
+    con = database([event(0)])
+    with pytest.raises(ValueError, match=error):
+        execute_plan(con, {**plan, **change}, **options)
+    assert con.execute("SELECT COUNT(*) FROM logs").fetchone() == (1,)
+    con.close()
+
+
+def test_execute_plan_requires_sqlite_338(monkeypatch):
+    c = SigmaCollection.from_dicts([detection(), correlation()])
+    plan = json.loads(sqliteBackend().convert(c, "zircolite"))[0]["correlation_plan"]
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 37, 2))
+    with pytest.raises(RuntimeError, match="3.38"):
+        execute_plan(database([]), plan)
+
+
 @pytest.mark.parametrize("materialized", [False, True])
 @pytest.mark.parametrize("aliased", [False, True])
 def test_pure_absence_uses_observed_context(materialized, aliased):
