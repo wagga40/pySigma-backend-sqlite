@@ -4,6 +4,7 @@ import json
 import random
 import sqlite3
 import statistics
+from datetime import UTC, datetime
 
 import pytest
 import yaml
@@ -342,8 +343,76 @@ def test_execute_plan_requires_sqlite_338(monkeypatch):
     c = SigmaCollection.from_dicts([detection(), correlation()])
     plan = json.loads(sqliteBackend().convert(c, "zircolite"))[0]["correlation_plan"]
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 37, 2))
+    con = database([])
     with pytest.raises(RuntimeError, match="3.38"):
-        execute_plan(database([]), plan)
+        execute_plan(con, plan)
+    con.close()
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+@pytest.mark.parametrize("seconds, starts", [(3, []), (5, [0]), (100, [0, 5])])
+def test_observation_end_decides_which_absence_windows_are_complete(
+    materialized, seconds, starts
+):
+    origin = datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+    rows = execute(
+        [detection(), correlation("temporal", condition="not a")],
+        [event(0, EventID=99), event(5, EventID=99)],
+        materialized=materialized,
+        observation_end=origin + seconds,
+    )
+    assert [row["window_start"] - origin for row in rows] == pytest.approx(starts)
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+def test_group_by_wider_than_one_json_object(materialized):
+    # json_object takes at most 63 pairs on SQLite 3.38.
+    fields = [f"F{i:02d}" for i in range(70)]
+    docs = [detection(), correlation(**{"group-by": fields})]
+    entry = json.loads(
+        sqliteBackend().convert(SigmaCollection.from_dicts(docs), "zircolite")
+    )[-1]
+    con = sqlite3.connect(":memory:")
+    con.execute(
+        "CREATE TABLE logs (timestamp TEXT, EventID INTEGER, "
+        + ", ".join(f"{field} TEXT" for field in fields)
+        + ")"
+    )
+    for t in (0, 1):
+        con.execute(
+            "INSERT INTO logs VALUES (?, 1, " + ", ".join("?" for _ in fields) + ")",
+            [event(t)["timestamp"], *(field.lower() for field in fields)],
+        )
+    if materialized:
+        keys = execute_plan(con, entry["correlation_plan"])[0][0]["group_keys"]
+    else:
+        keys = json.loads(con.execute(entry["rule"][0]).fetchone()[1])
+    con.close()
+    assert keys == {field: field.lower() for field in fields}
+
+
+def test_shared_child_correlation_is_compiled_once():
+    docs = [
+        detection(),
+        detection("b", 2),
+        detection("c", 3),
+        correlation(condition={"gte": 1}, name="k"),
+        correlation("temporal", ("k", "b"), name="c1"),
+        correlation("temporal", ("k", "c"), name="c2"),
+        correlation("temporal", ("c1", "c2"), name="p"),
+    ]
+    entry = json.loads(
+        sqliteBackend().convert(SigmaCollection.from_dicts(docs), "zircolite")
+    )[-1]
+    stages = entry["correlation_plan"]["prepare"]
+    assert sum(stage["name"].endswith("_alerts") for stage in stages) == 4
+    # SQLite 3.54 rejects the single statement of a chain this deep, so run the plan.
+    rows = execute(
+        docs, [event(0), event(1, EventID=2), event(2, EventID=3)], materialized=True
+    )
+    assert [(row["metric_value"], row["event_ids"]) for row in rows] == [
+        (2, ["0:1", "0:2", "0:3"])
+    ]
 
 
 @pytest.mark.parametrize("materialized", [False, True])

@@ -31,6 +31,39 @@ def test_plugin_discovery_exposes_sqlite_backend():
     assert InstalledSigmaPlugins.autodiscover().backends["sqlite"] is sqliteBackend
 
 
+@pytest.mark.parametrize("text, value", [("true", True), ("FALSE", False)])
+def test_collate_nocase_option_reads_cli_strings(text, value):
+    assert sqliteBackend(collate_nocase=text).collate_nocase is value
+
+
+def test_max_flat_operands_option_reads_cli_strings():
+    assert sqliteBackend(max_flat_operands="50").max_flat_operands == 50
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"collate_nocase": "yes"}, "collate_nocase"),
+        ({"max_flat_operands": "1"}, "max_flat_operands"),
+        ({"timestamp_format": "epoch"}, "timestamp_format"),
+        ({"fulltext_field": ""}, "fulltext_field"),
+    ],
+)
+def test_invalid_options_are_rejected(options, message):
+    with pytest.raises(ValueError, match=message):
+        sqliteBackend(**options)
+
+
+def test_fieldref_target_is_a_required_field():
+    rule = {
+        "title": "Test",
+        "logsource": {"category": "test"},
+        "detection": {"sel": {"fieldA|fieldref": "fieldB"}, "condition": "sel"},
+    }
+    output = sqliteBackend().convert(SigmaCollection.from_dicts([rule]), "zircolite")
+    assert json.loads(output)[0]["required_fields"] == ["fieldA", "fieldB"]
+
+
 def test_sqlite_and_expression(sqlite_backend: sqliteBackend):
     assert sqlite_backend.convert(
         SigmaCollection.from_yaml(
