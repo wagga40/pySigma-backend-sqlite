@@ -2,16 +2,16 @@
 
 import argparse
 import json
-from pathlib import Path
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import conftest  # noqa: E402,F401  (pySigma 2.0.0 editable-install workaround)
+from sigma.collection import SigmaCollection
+
 from sigma.backends.sqlite import sqliteBackend
 from sigma.backends.sqlite.runtime import execute_plan
-from sigma.collection import SigmaCollection
 
 
 def benchmark(size, kind, dense, timeout):
@@ -50,7 +50,7 @@ correlation:
     )
     result = dict(events=size, kind=kind, density="dense" if dense else "sparse")
     try:
-        rows, diagnostics = execute_plan(
+        rows, _ = execute_plan(
             connection, entry["correlation_plan"], include_events=False
         )
         result.update(alerts=len(rows), status="ok")

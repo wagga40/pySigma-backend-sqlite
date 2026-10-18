@@ -17,8 +17,7 @@ Keywords become substring predicates, `_sigma_fulltext LIKE '%event::clear%' ESC
 Sigma's `*` and `?` keep their meaning; punctuation and SQL wildcard characters
 stay literal. Keyword `|all`, negation, combination with named fields, numbers
 (searched as text), `|cased` (`GLOB`), `|re` (`REGEXP`), `|windash` and
-`|base64offset` all work. FTS5 is not used because its tokenization would change
-substring and punctuation semantics.
+`|base64offset` all work.
 
 ## The `source-values-v1` text
 
@@ -42,13 +41,13 @@ columns, so databases ingested without it must be re-ingested.
   list. Everything else keeps version 2.
 - `runtime.validate_fulltext(connection, entry["fulltext"])` checks the column
   exists and every row holds non-NULL TEXT, raising `ValueError` otherwise. Run it
-  before adding other missing columns or executing the SQL. `execute_plan` runs it
-  for version-3 plans unless given a `fulltext_preflight` callback.
+  before adding other missing columns or executing the SQL; `execute_plan` runs it
+  itself ([output format](output-format.md#correlation-plans)).
 - Never create a `fulltext` column empty or NULL: a missing search text must fail,
   not silently match nothing.
-- Remove the column from displayed or exported rows. Also strip it from evidence of
-  version-2 plans run on a database that has it: those plans carry no `fulltext`
-  metadata, so the runtime cannot tell the column is private.
+- Hide the column from displayed or exported rows. `execute_plan` strips it from
+  the evidence of version-3 plans only; version-2 plans carry no `fulltext`
+  metadata, so strip it yourself.
 
 ## Cost
 
@@ -77,6 +76,7 @@ poetry run python tools/audit_corpus.py /path/to/sigma \
 ```
 
 `windows-sysmon` needs `pysigma-pipeline-sysmon` and `pysigma-pipeline-windows`;
-`windows-audit` needs `pysigma-pipeline-windows`. The auditor provisions an empty
-TEXT column to prepare the SQL, so these numbers measure conversion coverage, not
-detection accuracy.
+`windows-audit` needs `pysigma-pipeline-windows`. The counts are for the 2.0.0
+releases of both: `pysigma-pipeline-windows` 2.0.1 rejects 10 registry rules under
+`windows-audit`. The auditor provisions an empty TEXT column to prepare the SQL, so
+these numbers measure conversion coverage, not detection accuracy.

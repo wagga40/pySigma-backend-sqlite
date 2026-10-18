@@ -13,6 +13,9 @@ jobs:
         os: [ 'ubuntu-latest' ]
         python-version: [ '3.11', '3.12', '3.13', '3.14' ]
     runs-on: ${{ matrix.os }}
+    env:
+      SQLITE_MIN: sqlite-amalgamation-3380000
+      SQLITE_CURRENT: sqlite-amalgamation-3540100
     steps:
       - uses: actions/checkout@v4
       - name: Install Poetry
@@ -26,11 +29,22 @@ jobs:
       - name: Build minimum supported SQLite
         if: matrix.python-version == '3.11'
         run: |
-          curl --fail --location https://www.sqlite.org/2022/sqlite-amalgamation-3380000.zip --output /tmp/sqlite-min.zip
+          curl --fail --location https://www.sqlite.org/2022/$SQLITE_MIN.zip --output /tmp/sqlite-min.zip
           unzip -q /tmp/sqlite-min.zip -d /tmp
-          cd /tmp/sqlite-amalgamation-3380000
-          cc -O2 -DSQLITE_THREADSAFE=0 shell.c sqlite3.c -lm -ldl -o /tmp/sqlite-min
+          cc -O2 -DSQLITE_THREADSAFE=0 /tmp/$SQLITE_MIN/shell.c /tmp/$SQLITE_MIN/sqlite3.c -lm -ldl -o /tmp/sqlite-min
           echo "SQLITE_MIN_BINARY=/tmp/sqlite-min" >> "$GITHUB_ENV"
+      - name: Build current SQLite runtime
+        if: matrix.python-version == '3.11'
+        run: |
+          curl --fail --location https://www.sqlite.org/2026/$SQLITE_CURRENT.zip --output /tmp/sqlite-current.zip
+          unzip -q /tmp/sqlite-current.zip -d /tmp
+          mkdir /tmp/sqlite-current
+          cc -O2 -fPIC -shared /tmp/$SQLITE_CURRENT/sqlite3.c -lm -ldl -o /tmp/sqlite-current/libsqlite3.so.0
+          # Keep setup-python's own library path after ours.
+          echo "LD_LIBRARY_PATH=/tmp/sqlite-current${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+      - name: Verify current SQLite runtime
+        if: matrix.python-version == '3.11'
+        run: poetry run python -c "import sqlite3; print(sqlite3.sqlite_version); assert sqlite3.sqlite_version_info >= (3, 54)"
       - name: Run tests
         run: poetry run pytest --cov=sigma --cov-report term --cov-report xml:cov.xml -vv
       - name: Store coverage for badge
@@ -65,8 +79,10 @@ jobs:
           python-version: '3.14'
       - run: pip install .
       # These pipeline releases still declare pysigma<2 but work unchanged on pySigma 2.
+      # pysigma-pipeline-windows 2.0.1 rejects 10 registry rules under windows-audit
+      # (fields without a Security 4657 equivalent), so the audit pins 2.0.0.
       - run: pip install --no-deps pysigma-pipeline-sysmon==2.0.0 pysigma-pipeline-windows==2.0.0
-      - run: python tools/audit_corpus.py .corpus --profile ${{ matrix.profile }} --output corpus-${{ matrix.profile }}.json
+      - run: python tools/audit_corpus.py .corpus --profile ${{ matrix.profile }} --fulltext-field _sigma_fulltext --output corpus-${{ matrix.profile }}.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -17,9 +17,9 @@ Maintained by [wagga](https://github.com/wagga40/).
 pip install pysigma-backend-sqlite
 ```
 
-Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) 2.x.
-Backend 2.0.0 is the last release for pySigma 1.5. Correlation output needs
-SQLite 3.38 or newer.
+Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) 2.0.1 or
+newer. Correlation output needs SQLite 3.38 or newer. sigma-cli 3.1 still requires
+pySigma 1.x, so alongside it pip installs backend 2.0.0, which has no keyword search.
 
 ## Quick start
 
@@ -50,35 +50,31 @@ Processing pipelines map a logsource to concrete fields. With
 SELECT * FROM logs WHERE Channel='Microsoft-Windows-Sysmon/Operational' AND (EventID=1 AND Image LIKE '%\\whoami.exe' ESCAPE '\')
 ```
 
-Those pipeline packages still declare `pysigma<2`; until they are updated, install
-them with `pip install --no-deps pysigma-pipeline-sysmon pysigma-pipeline-windows`.
-With sigma-cli:
+The sysmon and windows pipelines still declare `pysigma<2`; install them with
+`pip install --no-deps pysigma-pipeline-sysmon pysigma-pipeline-windows`. With sigma-cli:
 
 ```shell
 sigma convert -t sqlite -f zircolite -p sysmon -p windows-logsources rules/
 ```
-
-sigma-cli 3.1 still requires pySigma 1.x, so it installs backend 2.0.0.
 
 ## Output formats
 
 | Format | Output |
 |---|---|
 | `default` | One `SELECT * FROM logs WHERE ...` statement per rule |
-| `zircolite` | A JSON list with one entry per rule: Sigma metadata, the SQL, and what a consumer needs to run it. See [output format](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/output-format.md) |
+| `zircolite` | A JSON list with one entry per rule: Sigma metadata, the SQL, and what a consumer needs to run it. See [output format](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/output-format.md) |
 
 ## Options
 
-Pass options as constructor keywords, or from sigma-cli with `-O name=value`.
-Options are read at construction; assigning attributes later skips validation
-and does not change the timestamp expression.
+Pass options as constructor keywords, or from sigma-cli with `-O name=value`. Set
+them at construction; changing attributes afterwards is unsupported.
 
 | Option | Default | Purpose |
 |---|---|---|
 | `table` | `logs` | Table to query. A pipeline `setState` on `table` takes precedence |
 | `collate_nocase` | `false` | Emit `field='value' COLLATE NOCASE` for tables without `NOCASE` columns |
 | `max_flat_operands` | `100` | Longer AND/OR chains are nested to stay under SQLite's expression depth limit |
-| `fulltext_field` | none | Column of searchable event text; enables [keyword search](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/keyword-search.md) |
+| `fulltext_field` | none | Column of searchable event text; enables [keyword search](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/keyword-search.md) |
 | `timestamp_field` | `timestamp` | Event time column used by correlations |
 | `timestamp_format` | `iso` | `iso`, `unix`, `unix_ms` or `unix_us` |
 | `timestamp_seconds_expression` | ISO parser | SQL turning `{field}` into Unix seconds; overrides `timestamp_format` |
@@ -105,35 +101,32 @@ The SQL keeps Sigma's meaning without help from the caller:
 - **Negation.** Sigma reads a condition on a missing field as false; SQLite reads
   it as `NULL`, and `NOT NULL` drops the row. Every `NOT` therefore wraps its
   operand: `EventID=1 AND (NOT COALESCE((CommandLine LIKE '%foo%' ESCAPE '\'), 0))`.
-- **Case.** `LIKE` ignores case. `=` does only on `NOCASE` columns, which is how
-  Zircolite builds its table; otherwise set `collate_nocase`. `cased` uses `GLOB`.
+- **Case.** `LIKE` ignores case; `=` does only on `NOCASE` columns (Zircolite's
+  layout), otherwise set `collate_nocase`.
 - **Booleans.** `Flag: true` matches text or integer storage: `(Flag='true' OR Flag=1)`.
-- **Long lists.** Chains above `max_flat_operands` are regrouped, so rules with
-  thousands of values don't fail with "Expression tree is too large".
 - **Field names.** SQLite keywords and names with characters other than letters,
   digits and `_` are quoted with backticks. `field: null` becomes `field IS NULL`.
 
 ## Correlations
 
-All Sigma correlation types run in SQLite: `event_count`, `value_count`,
-`value_sum`, `value_avg`, `value_median`, `value_percentile`, `temporal` and
-`temporal_ordered`, including chains, aliases and extended temporal conditions.
-Each result row is one alert occurrence with its window, metric and contributing
-event IDs. Semantics are described in [correlations](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/correlations.md);
-upgrading from backend 1.x is covered in the [migration guide](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/migration-v2.md).
+All Sigma correlation types run in SQLite, including chains, aliases and extended
+temporal conditions. See [correlations](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/correlations.md)
+for their semantics and the [migration guide](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/migration-v2.md)
+for upgrading from backend 1.x.
 
 ## Keyword search
 
-Keyword (fieldless) selections need a column of searchable event text:
-`sqliteBackend(fulltext_field="_sigma_fulltext")`. Without it, keyword rules raise
-an error rather than guess. See [keyword search](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/keyword-search.md).
+Keyword (fieldless) rules need `fulltext_field`, a column holding each event's
+searchable text. See [keyword search](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/keyword-search.md).
 
 ## Limitations
 
 - **REGEXP.** SQLite has no built-in `REGEXP`. Register one that is false for `NULL`:
   `connection.create_function("regexp", 2, lambda p, v: v is not None and re.search(p, str(v)) is not None)`.
-  pySigma 2 validates `|re` patterns with RE2, so rules with lookarounds or
-  backreferences are rejected when parsed.
+  pySigma validates `|re` with RE2 by default, rejecting lookarounds and
+  backreferences. For trusted rules, pass `policy=TrustedPolicy` (from
+  `sigma.policy.profiles`) to `SigmaCollection.from_yaml()`; the patterns must then
+  suit Python's `re`.
 - **CIDR.** SQLite has no network type. Prefix patterns match IPv6 addresses only
   in the spellings pySigma expands to.
 - **Case folding** (`NOCASE`, `LIKE`) is ASCII only.
@@ -142,7 +135,7 @@ an error rather than guess. See [keyword search](https://github.com/wagga40/pySi
 - **Field existence.** SQL `NULL` cannot tell a missing field from an explicit null.
 - **Multi-field `value_count`** (a list in `condition.field`) is rejected.
 - **Unknown columns.** A query naming a column the table lacks fails to prepare.
-  Add missing columns as `NULL` first; see [output format](https://github.com/wagga40/pySigma-backend-sqlite/blob/main/docs/output-format.md).
+  Add missing columns as `NULL` first; see [output format](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/output-format.md).
 
 ## Development
 
@@ -152,6 +145,6 @@ poetry run pytest
 SQLITE_MIN_BINARY=/path/to/sqlite-3.38 poetry run pytest tests/test_sqlite_minimum.py
 ```
 
-`tools/audit_corpus.py` converts and prepares a SigmaHQ checkout per profile
-(coverage, not detection accuracy). `tools/benchmark_correlations.py` times
-sparse and dense correlation windows.
+`tools/audit_corpus.py` converts and prepares a SigmaHQ checkout per profile (see
+[coverage](https://github.com/SigmaHQ/pySigma-backend-sqlite/blob/main/docs/keyword-search.md#coverage)).
+`tools/benchmark_correlations.py` times sparse and dense correlation windows.

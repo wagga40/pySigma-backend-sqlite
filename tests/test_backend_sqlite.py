@@ -1,5 +1,13 @@
+import json
+import sqlite3
+
 import pytest
+from helpers import regexp
 from sigma.collection import SigmaCollection
+from sigma.plugins import InstalledSigmaPlugins
+from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
+from sigma.processing.transformations import SetStateTransformation
+
 from sigma.backends.sqlite import sqliteBackend
 
 
@@ -8,21 +16,58 @@ def sqlite_backend():
     return sqliteBackend()
 
 
-def test_plugin_discovery_exposes_sqlite_backend():
-    from sigma.plugins import InstalledSigmaPlugins
+def convert_selection(selection, backend=None):
+    """Queries for a rule whose condition is the single selection given."""
+    rule = {
+        "title": "Test",
+        "status": "test",
+        "logsource": {"category": "test_category", "product": "test_product"},
+        "detection": {"sel": selection, "condition": "sel"},
+    }
+    return (backend or sqliteBackend()).convert(SigmaCollection.from_dicts([rule]))
 
+
+def test_plugin_discovery_exposes_sqlite_backend():
     assert InstalledSigmaPlugins.autodiscover().backends["sqlite"] is sqliteBackend
 
 
-# ==================== Basic Tests (existing) ====================
+@pytest.mark.parametrize("text, value", [("true", True), ("FALSE", False)])
+def test_collate_nocase_option_reads_cli_strings(text, value):
+    assert sqliteBackend(collate_nocase=text).collate_nocase is value
 
 
-# TODO: implement tests for some basic queries and their expected results.
+def test_max_flat_operands_option_reads_cli_strings():
+    assert sqliteBackend(max_flat_operands="50").max_flat_operands == 50
+
+
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"collate_nocase": "yes"}, "collate_nocase"),
+        ({"max_flat_operands": "1"}, "max_flat_operands"),
+        ({"timestamp_format": "epoch"}, "timestamp_format"),
+        ({"fulltext_field": ""}, "fulltext_field"),
+    ],
+)
+def test_invalid_options_are_rejected(options, message):
+    with pytest.raises(ValueError, match=message):
+        sqliteBackend(**options)
+
+
+def test_fieldref_target_is_a_required_field():
+    rule = {
+        "title": "Test",
+        "logsource": {"category": "test"},
+        "detection": {"sel": {"fieldA|fieldref": "fieldB"}, "condition": "sel"},
+    }
+    output = sqliteBackend().convert(SigmaCollection.from_dicts([rule]), "zircolite")
+    assert json.loads(output)[0]["required_fields"] == ["fieldA", "fieldB"]
+
+
 def test_sqlite_and_expression(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -34,17 +79,14 @@ def test_sqlite_and_expression(sqlite_backend: sqliteBackend):
                     fieldB: valueB
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA='valueA' AND fieldB='valueB'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA='valueA' AND fieldB='valueB'"]
 
 
 def test_sqlite_or_expression(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -57,17 +99,14 @@ def test_sqlite_or_expression(sqlite_backend: sqliteBackend):
                     fieldB: valueB
                 condition: 1 of sel*
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA='valueA' OR fieldB='valueB'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA='valueA' OR fieldB='valueB'"]
 
 
 def test_sqlite_and_or_expression(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -83,19 +122,16 @@ def test_sqlite_and_or_expression(sqlite_backend: sqliteBackend):
                         - valueB2
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE (fieldA='valueA1' OR fieldA='valueA2') AND (fieldB='valueB1' OR fieldB='valueB2')"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE (fieldA='valueA1' OR fieldA='valueA2') AND (fieldB='valueB1' OR fieldB='valueB2')"
+    ]
 
 
 def test_sqlite_or_and_expression(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -110,19 +146,16 @@ def test_sqlite_or_and_expression(sqlite_backend: sqliteBackend):
                     fieldB: valueB2
                 condition: 1 of sel*
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE (fieldA='valueA1' AND fieldB='valueB1') OR (fieldA='valueA2' AND fieldB='valueB2')"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE (fieldA='valueA1' AND fieldB='valueB1') OR (fieldA='valueA2' AND fieldB='valueB2')"
+    ]
 
 
-def test_sqlite_in_expression(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+def test_sqlite_value_list_becomes_or_chain(sqlite_backend: sqliteBackend):
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -136,19 +169,16 @@ def test_sqlite_in_expression(sqlite_backend: sqliteBackend):
                         - valueC*
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE fieldA='valueA' OR fieldA='valueB' OR fieldA LIKE 'valueC%' ESCAPE '\\'"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE fieldA='valueA' OR fieldA='valueB' OR fieldA LIKE 'valueC%' ESCAPE '\\'"
+    ]
 
 
 def test_sqlite_regex_query(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -160,17 +190,14 @@ def test_sqlite_regex_query(sqlite_backend: sqliteBackend):
                     fieldB: foo
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA REGEXP 'foo.*bar' AND fieldB='foo'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA REGEXP 'foo.*bar' AND fieldB='foo'"]
 
 
 def test_sqlite_regex_query_single_quote(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -181,17 +208,14 @@ def test_sqlite_regex_query_single_quote(sqlite_backend: sqliteBackend):
                     fieldA|re: it's.exe
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA REGEXP 'it''s.exe'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA REGEXP 'it''s.exe'"]
 
 
 def test_sqlite_cidr_query(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -202,16 +226,12 @@ def test_sqlite_cidr_query(sqlite_backend: sqliteBackend):
                     field|cidr: 192.168.0.0/16
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE field LIKE '192.168.%' ESCAPE '\\'"]
-    )
+    ) == ["SELECT * FROM logs WHERE field LIKE '192.168.%' ESCAPE '\\'"]
 
 
 def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBackend):
     # pySigma 2 matches the zero groups both spelled out and compressed to "::".
-    import sqlite3
-
     query = sqlite_backend.convert(
         SigmaCollection.from_yaml(
             """
@@ -251,8 +271,6 @@ def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBac
 def test_sqlite_cidr_expanding_to_several_patterns_stays_grouped(
     sqlite_backend: sqliteBackend,
 ):
-    import sqlite3
-
     query = sqlite_backend.convert(
         SigmaCollection.from_yaml(
             """
@@ -296,8 +314,6 @@ def test_sqlite_cidr_expanding_to_several_patterns_stays_grouped(
 def test_sqlite_cidr_selection_combined_by_condition_stays_grouped(
     sqlite_backend: sqliteBackend, condition, expected
 ):
-    import sqlite3
-
     query = sqlite_backend.convert(
         SigmaCollection.from_yaml(
             f"""
@@ -327,10 +343,9 @@ def test_sqlite_cidr_selection_combined_by_condition_stays_grouped(
 
 
 def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -341,17 +356,14 @@ def test_sqlite_field_name_with_whitespace(sqlite_backend: sqliteBackend):
                     field name: value
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE `field name`='value'"]
-    )
+    ) == ["SELECT * FROM logs WHERE `field name`='value'"]
 
 
 def test_sqlite_value_with_wildcards(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -363,75 +375,24 @@ def test_sqlite_value_with_wildcards(sqlite_backend: sqliteBackend):
                     fieldB: wildcard_value
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE fieldA LIKE 'wildcard\\%value' ESCAPE '\\' AND fieldB LIKE 'wildcard\\_value' ESCAPE '\\'"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE fieldA LIKE 'wildcard\\%value' ESCAPE '\\' AND fieldB LIKE 'wildcard\\_value' ESCAPE '\\'"
+    ]
 
 
-def test_sqlite_value_contains(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|contains: wildcard%value
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA LIKE '%wildcard\\%value%' ESCAPE '\\'"]
-    )
-
-
-def test_sqlite_value_startswith(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|startswith: wildcard%value
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA LIKE 'wildcard\\%value%' ESCAPE '\\'"]
-    )
-
-
-def test_sqlite_value_endswith(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|endswith: wildcard%value
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA LIKE '%wildcard\\%value' ESCAPE '\\'"]
-    )
+@pytest.mark.parametrize(
+    "modifier, pattern",
+    [
+        ("contains", "%wildcard\\%value%"),
+        ("startswith", "wildcard\\%value%"),
+        ("endswith", "%wildcard\\%value"),
+    ],
+)
+def test_sqlite_value_like_forms_escape_literal_percent(modifier, pattern):
+    assert convert_selection({f"fieldA|{modifier}": "wildcard%value"}) == [
+        f"SELECT * FROM logs WHERE fieldA LIKE '{pattern}' ESCAPE '\\'"
+    ]
 
 
 def test_sqlite_fts_keywords_str(sqlite_backend: sqliteBackend):
@@ -479,10 +440,9 @@ def test_sqlite_fts_keywords_num(sqlite_backend: sqliteBackend):
 
 
 def test_sqlite_value_case_sensitive_contains(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -493,17 +453,14 @@ def test_sqlite_value_case_sensitive_contains(sqlite_backend: sqliteBackend):
                     fieldA|contains|cased: VaLuE
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA GLOB '*VaLuE*'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA GLOB '*VaLuE*'"]
 
 
 def test_sqlite_value_case_sensitive_match(sqlite_backend: sqliteBackend):
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                r"""
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            r"""
             title: Test
             status: test
             logsource:
@@ -514,10 +471,8 @@ def test_sqlite_value_case_sensitive_match(sqlite_backend: sqliteBackend):
                     fieldA|cased: 'C:\Windows\System32\cmd.exe'
                 condition: sel
         """
-            )
         )
-        == [r"SELECT * FROM logs WHERE fieldA GLOB 'C:\Windows\System32\cmd.exe'"]
-    )
+    ) == [r"SELECT * FROM logs WHERE fieldA GLOB 'C:\Windows\System32\cmd.exe'"]
 
 
 @pytest.mark.parametrize(
@@ -540,8 +495,6 @@ def test_sqlite_case_sensitive_executes_on_sqlite3(
     sqlite_backend: sqliteBackend, detection: str, stored: str, should_match: bool
 ):
     """Generated |cased queries must actually run against a real sqlite3 connection."""
-    import sqlite3
-
     rule = SigmaCollection.from_yaml(
         "title: Test\n"
         "status: test\n"
@@ -580,8 +533,6 @@ def test_sqlite_zircolite_output(sqlite_backend: sqliteBackend):
                 condition: sel
         """
     )
-    import json
-
     entries = json.loads(sqlite_backend.convert(rule, "zircolite"))
     assert len(entries) == 1
     assert entries[0]["title"] == "Test"
@@ -596,8 +547,6 @@ def test_sqlite_zircolite_output_with_channel_and_eventid(
     sqlite_backend: sqliteBackend,
 ):
     """Test Zircolite output includes channel and eventid arrays"""
-    import json
-
     rule = SigmaCollection.from_yaml(
         r"""
             title: Test with Channel and EventID
@@ -624,8 +573,6 @@ def test_sqlite_zircolite_output_with_channel_and_eventid(
 
 def test_sqlite_zircolite_output_with_single_eventid(sqlite_backend: sqliteBackend):
     """Test Zircolite output with a single EventID"""
-    import json
-
     rule = SigmaCollection.from_yaml(
         r"""
             title: Test with Single EventID
@@ -648,8 +595,6 @@ def test_sqlite_zircolite_output_eventid_from_multiple_selections(
     sqlite_backend: sqliteBackend,
 ):
     """Test Zircolite output extracts EventIDs from multiple detection selections"""
-    import json
-
     rule = SigmaCollection.from_yaml(
         r"""
             title: Test with Multiple Selections
@@ -677,10 +622,9 @@ def test_sqlite_zircolite_output_eventid_from_multiple_selections(
 
 def test_sqlite_fieldref_equals(sqlite_backend: sqliteBackend):
     """Test field reference modifier - field equals another field"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -691,18 +635,15 @@ def test_sqlite_fieldref_equals(sqlite_backend: sqliteBackend):
                     fieldA|fieldref: fieldB
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA=fieldB"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA=fieldB"]
 
 
 def test_sqlite_fieldref_multiple_values(sqlite_backend: sqliteBackend):
     """Test field reference modifier with multiple field values"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -717,238 +658,43 @@ def test_sqlite_fieldref_multiple_values(sqlite_backend: sqliteBackend):
                     fieldC: bar
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE (fieldA=fieldD OR fieldA=fieldE) AND fieldB='foo' AND fieldC='bar'"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE (fieldA=fieldD OR fieldA=fieldE) AND fieldB='foo' AND fieldC='bar'"
+    ]
 
 
 # ==================== Timestamp Part Modifier Tests ====================
 
 
-def test_sqlite_timestamp_hour(sqlite_backend: sqliteBackend):
-    """Test hour timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|hour: 14
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%H', timestamp) AS INTEGER)=14"]
-    )
-
-
-def test_sqlite_timestamp_minute(sqlite_backend: sqliteBackend):
-    """Test minute timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|minute: 30
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%M', timestamp) AS INTEGER)=30"]
-    )
-
-
-def test_sqlite_timestamp_day(sqlite_backend: sqliteBackend):
-    """Test day timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|day: 15
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%d', timestamp) AS INTEGER)=15"]
-    )
-
-
-def test_sqlite_timestamp_week(sqlite_backend: sqliteBackend):
-    """Test week timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|week: 42
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%W', timestamp) AS INTEGER)=42"]
-    )
-
-
-def test_sqlite_timestamp_month(sqlite_backend: sqliteBackend):
-    """Test month timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|month: 12
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%m', timestamp) AS INTEGER)=12"]
-    )
-
-
-def test_sqlite_timestamp_year(sqlite_backend: sqliteBackend):
-    """Test year timestamp part modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    timestamp|year: 2024
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE CAST(strftime('%Y', timestamp) AS INTEGER)=2024"]
-    )
+@pytest.mark.parametrize(
+    "modifier, value, part",
+    [
+        ("minute", 30, "%M"),
+        ("hour", 14, "%H"),
+        ("day", 15, "%d"),
+        ("week", 42, "%W"),
+        ("month", 12, "%m"),
+        ("year", 2024, "%Y"),
+    ],
+)
+def test_sqlite_timestamp_part(modifier, value, part):
+    assert convert_selection({f"timestamp|{modifier}": value}) == [
+        f"SELECT * FROM logs WHERE CAST(strftime('{part}', timestamp) AS INTEGER)={value}"
+    ]
 
 
 # ==================== Comparison Modifier Tests ====================
 
 
-def test_sqlite_compare_gt(sqlite_backend: sqliteBackend):
-    """Test greater than comparison modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|gt: 100
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA > 100"]
-    )
-
-
-def test_sqlite_compare_gte(sqlite_backend: sqliteBackend):
-    """Test greater than or equal comparison modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|gte: 100
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA >= 100"]
-    )
-
-
-def test_sqlite_compare_lt(sqlite_backend: sqliteBackend):
-    """Test less than comparison modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|lt: 50
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA < 50"]
-    )
-
-
-def test_sqlite_compare_lte(sqlite_backend: sqliteBackend):
-    """Test less than or equal comparison modifier"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA|lte: 50
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE fieldA <= 50"]
-    )
+@pytest.mark.parametrize(
+    "modifier, value, operator",
+    [("gt", 100, ">"), ("gte", 100, ">="), ("lt", 50, "<"), ("lte", 50, "<=")],
+)
+def test_sqlite_compare(modifier, value, operator):
+    assert convert_selection({f"fieldA|{modifier}": value}) == [
+        f"SELECT * FROM logs WHERE fieldA {operator} {value}"
+    ]
 
 
 # ==================== All Modifier Tests ====================
@@ -956,10 +702,9 @@ def test_sqlite_compare_lte(sqlite_backend: sqliteBackend):
 
 def test_sqlite_all_modifier(sqlite_backend: sqliteBackend):
     """Test all modifier - all values must match"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -972,18 +717,15 @@ def test_sqlite_all_modifier(sqlite_backend: sqliteBackend):
                         - value2
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA='value1' AND fieldA='value2'"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA='value1' AND fieldA='value2'"]
 
 
 def test_sqlite_all_contains_modifier(sqlite_backend: sqliteBackend):
     """Test all modifier with contains"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -996,12 +738,10 @@ def test_sqlite_all_contains_modifier(sqlite_backend: sqliteBackend):
                         - part2
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE fieldA LIKE '%part1%' ESCAPE '\\' AND fieldA LIKE '%part2%' ESCAPE '\\'"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE fieldA LIKE '%part1%' ESCAPE '\\' AND fieldA LIKE '%part2%' ESCAPE '\\'"
+    ]
 
 
 # ==================== Null Value Tests ====================
@@ -1009,10 +749,9 @@ def test_sqlite_all_contains_modifier(sqlite_backend: sqliteBackend):
 
 def test_sqlite_null_value(sqlite_backend: sqliteBackend):
     """Test null value detection"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1023,57 +762,20 @@ def test_sqlite_null_value(sqlite_backend: sqliteBackend):
                     fieldA: null
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA IS NULL"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA IS NULL"]
 
 
 # ==================== Boolean Value Tests ====================
 
 
-def test_sqlite_boolean_true(sqlite_backend: sqliteBackend):
-    """Test boolean true value"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA: true
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE (fieldA='true' OR fieldA=1)"]
-    )
-
-
-def test_sqlite_boolean_false(sqlite_backend: sqliteBackend):
-    """Test boolean false value"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
-            title: Test
-            status: test
-            logsource:
-                category: test_category
-                product: test_product
-            detection:
-                sel:
-                    fieldA: false
-                condition: sel
-        """
-            )
-        )
-        == ["SELECT * FROM logs WHERE (fieldA='false' OR fieldA=0)"]
-    )
+@pytest.mark.parametrize(
+    "value, text, number", [(True, "true", 1), (False, "false", 0)]
+)
+def test_sqlite_boolean(value, text, number):
+    assert convert_selection({"fieldA": value}) == [
+        f"SELECT * FROM logs WHERE (fieldA='{text}' OR fieldA={number})"
+    ]
 
 
 # ==================== Additional Modifier Tests ====================
@@ -1081,10 +783,9 @@ def test_sqlite_boolean_false(sqlite_backend: sqliteBackend):
 
 def test_sqlite_exists_modifier(sqlite_backend: sqliteBackend):
     """Test exists modifier - field must exist (not null)"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1095,18 +796,15 @@ def test_sqlite_exists_modifier(sqlite_backend: sqliteBackend):
                     fieldA|exists: true
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE fieldA IS NOT NULL"]
-    )
+    ) == ["SELECT * FROM logs WHERE fieldA IS NOT NULL"]
 
 
 def test_sqlite_not_condition(sqlite_backend: sqliteBackend):
     """Test NOT condition"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1119,20 +817,17 @@ def test_sqlite_not_condition(sqlite_backend: sqliteBackend):
                     fieldB: valueB
                 condition: sel and not filter
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE fieldA='valueA' AND (NOT COALESCE((fieldB='valueB'), 0))"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE fieldA='valueA' AND (NOT COALESCE((fieldB='valueB'), 0))"
+    ]
 
 
 def test_sqlite_neq_single_value(sqlite_backend: sqliteBackend):
     """Test neq modifier with a single value"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1143,18 +838,15 @@ def test_sqlite_neq_single_value(sqlite_backend: sqliteBackend):
                     fieldA|neq: valueA
                 condition: sel
         """
-            )
         )
-        == ["SELECT * FROM logs WHERE NOT COALESCE((fieldA='valueA'), 0)"]
-    )
+    ) == ["SELECT * FROM logs WHERE NOT COALESCE((fieldA='valueA'), 0)"]
 
 
 def test_sqlite_neq_multi_value(sqlite_backend: sqliteBackend):
     """Test neq modifier with multiple values"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1167,20 +859,15 @@ def test_sqlite_neq_multi_value(sqlite_backend: sqliteBackend):
                         - val2
                 condition: sel
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE NOT COALESCE((fieldA='val1' OR fieldA='val2'), 0)"
-        ]
-    )
+    ) == ["SELECT * FROM logs WHERE NOT COALESCE((fieldA='val1' OR fieldA='val2'), 0)"]
 
 
 def test_sqlite_wildcard_filter_pattern(sqlite_backend: sqliteBackend):
     """Regression: filter selections matched via pattern_* with wildcard values"""
-    assert (
-        sqlite_backend.convert(
-            SigmaCollection.from_yaml(
-                """
+    assert sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
             title: Test
             status: test
             logsource:
@@ -1195,18 +882,15 @@ def test_sqlite_wildcard_filter_pattern(sqlite_backend: sqliteBackend):
                     fieldC: valueC
                 condition: sel and not 1 of filter_*
         """
-            )
         )
-        == [
-            "SELECT * FROM logs WHERE fieldA='valueA' AND (NOT COALESCE((fieldB LIKE 'valueB%' ESCAPE '\\' OR fieldC='valueC'), 0))"
-        ]
-    )
+    ) == [
+        "SELECT * FROM logs WHERE fieldA='valueA' AND (NOT COALESCE((fieldB LIKE 'valueB%' ESCAPE '\\' OR fieldC='valueC'), 0))"
+    ]
 
 
 def test_sqlite_custom_timestamp_field():
     """Test that timestamp_field can be customized for temporal correlations"""
-    backend = sqliteBackend(correlation_methods=["default"])
-    backend.timestamp_field = "event_time"
+    backend = sqliteBackend(timestamp_field="event_time")
 
     rules = SigmaCollection.from_yaml(
         """
@@ -1239,8 +923,6 @@ def test_sqlite_custom_timestamp_field():
 
 def test_sqlite_table_name_from_setstate_pipeline():
     """Table name is set via a setState transformation ('table' key) for plain and correlation rules."""
-    from sigma.processing.pipeline import ProcessingPipeline, ProcessingItem
-    from sigma.processing.transformations import SetStateTransformation
 
     pipeline = ProcessingPipeline(
         items=[
@@ -1341,18 +1023,12 @@ EVENTS = [
 
 def make_db():
     """An in-memory table shaped like Zircolite's: NOCASE columns and a regexp() function."""
-    import sqlite3
-
     connection = sqlite3.connect(":memory:")
     connection.create_function(
         # Mirrors zircolite/core.py: a regexp against a missing field is false, not an error.
         "regexp",
         2,
-        lambda pattern, value: (
-            0
-            if value is None
-            else (1 if __import__("re").search(pattern, str(value)) else 0)
-        ),
+        regexp,
     )
     connection.execute(
         "CREATE TABLE logs ("
@@ -1372,7 +1048,6 @@ def make_db():
 def matching_rows(detection: str, backend: sqliteBackend = None) -> set:
     """Row ids returned by the rule's query, run against the fixture database."""
     backend = backend or sqliteBackend()
-    backend.table = "logs"
     query = backend.convert(
         SigmaCollection.from_yaml(
             "title: Test\nstatus: test\n"
@@ -1465,8 +1140,6 @@ def test_behaviour_equality_is_case_insensitive_on_nocase_columns():
 
 def test_behaviour_collate_nocase_option_on_a_binary_column():
     """Without NOCASE columns the option is what keeps "=" Sigma-conformant."""
-    import sqlite3
-
     rule = SigmaCollection.from_yaml(
         "title: Test\nstatus: test\nlogsource:\n    product: windows\n"
         "detection:\n    sel:\n        User: 'ALICE'\n    condition: sel\n"
@@ -1476,32 +1149,24 @@ def test_behaviour_collate_nocase_option_on_a_binary_column():
     connection.execute("INSERT INTO logs VALUES (1, 'alice')")
 
     plain = sqliteBackend()
-    plain.table = "logs"
     assert connection.execute(plain.convert(rule)[0]).fetchall() == []
 
-    collating = sqliteBackend()
-    collating.table = "logs"
-    collating.collate_nocase = True
+    collating = sqliteBackend(collate_nocase=True)
     assert connection.execute(collating.convert(rule)[0]).fetchall() == [(1, "alice")]
 
 
 def test_behaviour_deep_or_chain_is_accepted_by_sqlite():
     """A flat chain of this length exceeds SQLITE_MAX_EXPR_DEPTH and never matched anything."""
     values = "".join(f"            - v{index}\n" for index in range(5000))
-    assert (
-        matching_rows(
-            "    sel:\n        CommandLine|contains:\n"
-            + values
-            + "    condition: sel\n"
-        )
-        == set()
-    )
+    assert matching_rows(
+        "    sel:\n        CommandLine|contains:\n"
+        + values
+        + "            - bar.exe\n    condition: sel\n"
+    ) == {3}
 
 
 def test_fieldref_like_metacharacters_from_the_event_are_literal():
     """fieldref compares two fields, so a "%" in the second must not become a wildcard."""
-    import sqlite3
-
     query = (
         sqliteBackend()
         .convert(
@@ -1531,8 +1196,6 @@ def test_fieldref_like_metacharacters_from_the_event_are_literal():
 
 
 def zircolite_rule(detection: str) -> dict:
-    import json
-
     return json.loads(
         sqliteBackend().convert(
             SigmaCollection.from_yaml(
@@ -1584,8 +1247,6 @@ def test_zircolite_metadata_unbounded_when_an_or_branch_is():
 
 
 def test_zircolite_correlation_rule_is_marked():
-    import json
-
     rules = SigmaCollection.from_yaml(
         """
         title: Base Rule
@@ -1661,9 +1322,7 @@ CORRELATION_EVENTS = (
 
 def correlation_groups(correlation: str) -> set:
     """Groups selected by the correlation query, run against CORRELATION_EVENTS."""
-    import sqlite3
-
-    query = sqliteBackend(correlation_methods=["default"]).convert(
+    query = sqliteBackend().convert(
         SigmaCollection.from_yaml(CORRELATION_BASE + correlation)
     )[-1]
     connection = sqlite3.connect(":memory:")
@@ -1674,9 +1333,7 @@ def correlation_groups(correlation: str) -> set:
     connection.executemany(
         "INSERT INTO logs VALUES (?, ?, ?, ?, ?)", CORRELATION_EVENTS
     )
-    return {
-        __import__("json").loads(row[1])["Host"] for row in connection.execute(query)
-    }
+    return {json.loads(row[1])["Host"] for row in connection.execute(query)}
 
 
 @pytest.mark.parametrize(
@@ -1715,9 +1372,8 @@ def test_correlation_honours_the_timespan(correlation_type, condition, expected)
 
 
 def test_correlation_temporal_ignores_order():
-    assert (
-        correlation_groups(
-            """
+    assert correlation_groups(
+        """
         title: Correlation
         status: test
         correlation:
@@ -1728,16 +1384,13 @@ def test_correlation_temporal_ignores_order():
             group-by: Host
             timespan: 5m
     """
-        )
-        == {"ordered", "reversed"}
-    )
+    ) == {"ordered", "reversed"}
 
 
 def test_correlation_temporal_ordered_enforces_order():
     """Without the ordering test this type was indistinguishable from plain temporal."""
-    assert (
-        correlation_groups(
-            """
+    assert correlation_groups(
+        """
         title: Correlation
         status: test
         correlation:
@@ -1748,15 +1401,12 @@ def test_correlation_temporal_ordered_enforces_order():
             group-by: Host
             timespan: 5m
     """
-        )
-        == {"ordered"}
-    )
+    ) == {"ordered"}
 
 
 def test_correlation_temporal_extended_condition():
-    assert (
-        correlation_groups(
-            """
+    assert correlation_groups(
+        """
         title: Correlation
         status: test
         correlation:
@@ -1768,15 +1418,12 @@ def test_correlation_temporal_extended_condition():
             timespan: 5m
             condition: rule_a and not rule_b
     """
-        )
-        == {"burst", "spread"}
-    )
+    ) == {"burst", "spread"}
 
 
 def test_correlation_temporal_ordered_extended_condition():
-    assert (
-        correlation_groups(
-            """
+    assert correlation_groups(
+        """
         title: Correlation
         status: test
         correlation:
@@ -1788,6 +1435,4 @@ def test_correlation_temporal_ordered_extended_condition():
             timespan: 5m
             condition: rule_a and rule_b
     """
-        )
-        == {"ordered"}
-    )
+    ) == {"ordered"}

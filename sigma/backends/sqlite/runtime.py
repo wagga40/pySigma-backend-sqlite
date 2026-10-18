@@ -1,17 +1,22 @@
 """Execute correlation plans on a consumer-owned SQLite connection."""
 
-from __future__ import annotations
-
 import json
 import re
 import sqlite3
+from collections import Counter
 
-from .correlation import quote
+from .correlation import BARE_NAME, FULLTEXT_REPRESENTATION, quote
+
+_NAME = rf"(?:{BARE_NAME}|`(?:[^`]|``)+`)"
+_TABLE_NAME = re.compile(rf"{_NAME}(?:\.{_NAME})*\Z")
 
 
-_TABLE_NAME = re.compile(
-    r"(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`)(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|`(?:[^`]|``)+`))*\Z"
-)
+def _columns(connection, table):
+    """Lowercased column names of a table."""
+    cursor = connection.execute(f"SELECT * FROM {table} LIMIT 0")
+    columns = {column[0].lower() for column in cursor.description}
+    cursor.close()
+    return columns
 
 
 def validate_fulltext(connection, requirements):
@@ -19,30 +24,21 @@ def validate_fulltext(connection, requirements):
     if not isinstance(requirements, list) or not requirements:
         raise ValueError("Keyword search requires nonempty fulltext requirements")
     for item in requirements:
-        if not isinstance(item, dict) or set(item) != {
-            "table",
-            "field",
-            "representation",
-        }:
-            raise ValueError(
-                "Invalid fulltext requirement; re-ingest events for keyword search"
-            )
-        table, field = item["table"], item["field"]
         if (
-            not isinstance(table, str)
-            or not _TABLE_NAME.fullmatch(table)
-            or not isinstance(field, str)
-            or not field
-            or item["representation"] != "source-values-v1"
+            not isinstance(item, dict)
+            or set(item) != {"table", "field", "representation"}
+            or not isinstance(item["table"], str)
+            or not _TABLE_NAME.fullmatch(item["table"])
+            or not isinstance(item["field"], str)
+            or not item["field"]
+            or item["representation"] != FULLTEXT_REPRESENTATION
         ):
             raise ValueError(
                 "Invalid fulltext requirement; re-ingest events for keyword search"
             )
+        table, field = item["table"], item["field"]
         try:
-            cursor = connection.execute(f"SELECT * FROM {table} LIMIT 0")
-            existing = {column[0].lower() for column in cursor.description}
-            cursor.close()
-            if field.lower() not in existing:
+            if field.lower() not in _columns(connection, table):
                 raise ValueError(
                     f"Keyword text column {field!r} is missing from {table}; re-ingest events"
                 )
@@ -63,9 +59,7 @@ def validate_fulltext(connection, requirements):
 def ensure_fields(connection, requirements):
     """Materialize absent event fields as NULL, using compiler metadata."""
     for table, fields in requirements.items():
-        cursor = connection.execute(f"SELECT * FROM {table} LIMIT 0")
-        existing = {d[0].lower() for d in cursor.description}
-        cursor.close()
+        existing = _columns(connection, table)
         for field in fields:
             if field.lower() not in existing and field.lower() != "rowid":
                 connection.execute(
@@ -87,21 +81,23 @@ def execute_plan(
     """
     if plan.get("version") not in (2, 3):
         raise ValueError("Unsupported correlation plan version")
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be nonnegative")
+    if sqlite3.sqlite_version_info < (3, 38, 0):
+        raise RuntimeError(
+            "Correlation plans require SQLite >= 3.38 with JSON functions"
+        )
     if plan["version"] == 3:
         requirements = plan.get("fulltext")
         if fulltext_preflight is None:
             validate_fulltext(connection, requirements)
         else:
             fulltext_preflight(requirements)
-    if sqlite3.sqlite_version_info < (3, 38, 0):
-        raise RuntimeError(
-            "Correlation plans require SQLite >= 3.38 with JSON functions"
-        )
     created = []
     try:
         for table in plan["source_tables"].values():
             connection.execute(
-                f'SELECT {quote(plan["event_id_field"])} FROM {table} LIMIT 0'
+                f"SELECT {quote(plan['event_id_field'])} FROM {table} LIMIT 0"
             ).close()
         ensure_fields(connection, plan["required_fields"])
         for stage in plan["prepare"]:
@@ -110,20 +106,20 @@ def execute_plan(
                 raise ValueError("Invalid correlation relation name")
             # Never drop or overwrite a consumer's pre-existing temporary table.
             connection.execute(
-                f'CREATE TEMP TABLE {quote(name)} AS {stage["select"]}'
+                f"CREATE TEMP TABLE {quote(name)} AS {stage['select']}"
             ).close()
             created.append(name)
             for i, columns in enumerate(stage["indexes"]):
                 connection.execute(
-                    f'CREATE INDEX temp.{quote(name + "_i" + str(i))} '
-                    f'ON {quote(name)} ({", ".join(map(quote, columns))})'
+                    f"CREATE INDEX temp.{quote(name + '_i' + str(i))} "
+                    f"ON {quote(name)} ({', '.join(map(quote, columns))})"
                 ).close()
-        diagnostics = {}
+        diagnostics = Counter()
         if plan["diagnostics"]:
             for reason, count in connection.execute(plan["diagnostics"]):
-                diagnostics[reason] = diagnostics.get(reason, 0) + count
+                diagnostics[reason] += count
         sql = plan["query"]
-        if limit is not None and limit >= 0:
+        if limit is not None:
             sql += f" LIMIT {int(limit) + 1}"
         cursor = connection.execute(sql)
         columns = [d[0] for d in cursor.description]
@@ -168,7 +164,7 @@ def execute_plan(
                 cursor.close()
             for row in rows:
                 row["evidence"] = [evidence[i] for i in row["event_ids"]]
-        return rows, diagnostics
+        return rows, dict(diagnostics)
     finally:
         for name in reversed(created):
             # An interrupted CREATE TABLE AS can roll back the temp schema.

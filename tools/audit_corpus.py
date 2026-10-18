@@ -5,20 +5,23 @@ field requirements, not a SQL scanner or a consumer's accidental event schema.
 """
 
 import argparse
-from collections import Counter
 import json
-from pathlib import Path
 import re
 import sqlite3
 import sys
+from collections import Counter
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import conftest  # noqa: E402,F401  (pySigma 2.0.0 editable-install workaround)
-from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite.runtime import ensure_fields, execute_plan
 from sigma.collection import SigmaCollection
 from sigma.correlations import SigmaCorrelationRule
 
+from sigma.backends.sqlite import sqliteBackend
+from sigma.backends.sqlite.runtime import (
+    ensure_fields,
+    execute_plan,
+    validate_fulltext,
+)
 
 KEYWORD_GAP = "Keyword search requires fulltext_field"
 
@@ -91,14 +94,14 @@ def audit(path, profile, *, fulltext_field=None):
             connection.create_function(
                 "regexp",
                 2,
-                lambda pattern, value: bool(value and re.search(pattern, str(value))),
+                lambda pattern, value: (
+                    value is not None and re.search(pattern, str(value)) is not None
+                ),
             )
             try:
                 connection.execute("CREATE TABLE logs(row_id INTEGER PRIMARY KEY)")
                 fulltext = entry.get("fulltext", [])
                 if fulltext:
-                    from sigma.backends.sqlite.runtime import validate_fulltext
-
                     for requirement in fulltext:
                         table = requirement["table"]
                         field = backend.escape_and_quote_field(requirement["field"])

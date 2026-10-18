@@ -4,91 +4,16 @@ import json
 import random
 import sqlite3
 import statistics
+from datetime import UTC, datetime
 
 import pytest
 import yaml
-from sigma.backends.sqlite import sqliteBackend
-from sigma.backends.sqlite.runtime import execute_plan
+from helpers import correlation, database, detection, event, execute
 from sigma.collection import SigmaCollection
 from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
 
-
-def detection(name="a", event=1):
-    return dict(
-        title=name,
-        name=name,
-        logsource={"category": "test"},
-        detection={"s": {"EventID": event}, "condition": "s"},
-    )
-
-
-def correlation(kind="event_count", refs=("a",), condition=None, name="corr", **extra):
-    c = dict(type=kind, rules=list(refs), timespan="5s", **{"group-by": ["Host"]})
-    if condition is not None:
-        c["condition"] = condition
-    elif not kind.startswith("temporal"):
-        c["condition"] = {"gte": 2}
-    c.update(extra)
-    return dict(title=name, name=name, correlation=c)
-
-
-def database(events):
-    con = sqlite3.connect(":memory:")
-    con.execute(
-        "CREATE TABLE logs (row_id INTEGER PRIMARY KEY, timestamp TEXT, Host TEXT COLLATE NOCASE, "
-        "EventID INTEGER, User TEXT, OtherUser TEXT, Bytes, event_count INTEGER, OriginalLogfile TEXT)"
-    )
-    for i, event in enumerate(events, 1):
-        row = dict(
-            row_id=i,
-            Host="h",
-            EventID=1,
-            User="u",
-            OtherUser="u",
-            Bytes=10,
-            event_count=0,
-            OriginalLogfile="input.json",
-            **{},
-        )
-        row.update(event)
-        con.execute(
-            "INSERT INTO logs ("
-            + ",".join("`" + k + "`" for k in row)
-            + ") VALUES ("
-            + ",".join("?" for _ in row)
-            + ")",
-            list(row.values()),
-        )
-    return con
-
-
-def event(t, **values):
-    return dict(timestamp=f"2024-01-01T00:00:{t:06.3f}", **values)
-
-
-def execute(docs, events, *, materialized=False, **options):
-    b = sqliteBackend(event_id_field="row_id", **options)
-    entries = json.loads(
-        b.convert(SigmaCollection.from_yaml(yaml.safe_dump_all(docs)), "zircolite")
-    )
-    entry = entries[-1]
-    con = database(events)
-    try:
-        if materialized:
-            rows, diagnostics = execute_plan(con, entry["correlation_plan"])
-            assert not con.execute(
-                "SELECT name FROM sqlite_temp_master WHERE type='table'"
-            ).fetchall()
-            return rows
-        cursor = con.execute(entry["rule"][0])
-        keys = [d[0] for d in cursor.description]
-        rows = [dict(zip(keys, r)) for r in cursor]
-        for row in rows:
-            for key in ("group_keys", "event_ids", "child_alert_ids"):
-                row[key] = json.loads(row[key])
-        return rows
-    finally:
-        con.close()
+from sigma.backends.sqlite import sqliteBackend
+from sigma.backends.sqlite.runtime import execute_plan
 
 
 @pytest.mark.parametrize("materialized", [False, True])
@@ -352,6 +277,34 @@ def test_multi_field_value_count_is_reported_as_unsupported():
         sqliteBackend().convert(c)
 
 
+def test_collect_errors_skips_only_failing_correlations():
+    keyword = dict(detection("search"), detection={"k": ["needle"], "condition": "k"})
+    multi = correlation(
+        "value_count", condition={"gte": 2, "field": ["User", "OtherUser"]}
+    )
+    docs = [
+        detection(),
+        keyword,
+        dict(multi, title="multi", name="multi"),
+        correlation(refs=("search",), name="searched"),
+        correlation(name="kept"),
+    ]
+    backend = sqliteBackend(collect_errors=True)
+    entries = json.loads(backend.convert(SigmaCollection.from_dicts(docs), "zircolite"))
+    assert [entry["title"] for entry in entries] == ["kept"]
+    assert sorted(rule.title for rule, _ in backend.errors) == [
+        "multi",
+        "search",
+        "searched",
+    ]
+
+
+@pytest.mark.parametrize("value", ["soon", float("inf"), float("nan")])
+def test_observation_end_is_validated_at_construction(value):
+    with pytest.raises(ValueError, match="observation_end"):
+        sqliteBackend(observation_end=value)
+
+
 def test_required_fields_and_runtime_cleanup_on_failure():
     c = SigmaCollection.from_yaml(yaml.safe_dump_all([detection(), correlation()]))
     entry = json.loads(sqliteBackend().convert(c, "zircolite"))[0]
@@ -366,6 +319,100 @@ def test_required_fields_and_runtime_cleanup_on_failure():
     ).fetchall()
     assert con.execute("SELECT COUNT(*) FROM logs").fetchone() == (1,)
     con.close()
+
+
+@pytest.mark.parametrize(
+    "change, options, error",
+    [
+        ({"version": 1}, {}, "plan version"),
+        ({"prepare": [{"name": "logs", "select": "SELECT 1"}]}, {}, "relation name"),
+        ({}, {"limit": -1}, "limit must be nonnegative"),
+    ],
+)
+def test_execute_plan_rejects_invalid_input(change, options, error):
+    c = SigmaCollection.from_dicts([detection(), correlation()])
+    plan = json.loads(sqliteBackend().convert(c, "zircolite"))[0]["correlation_plan"]
+    con = database([event(0)])
+    with pytest.raises(ValueError, match=error):
+        execute_plan(con, {**plan, **change}, **options)
+    assert con.execute("SELECT COUNT(*) FROM logs").fetchone() == (1,)
+    con.close()
+
+
+def test_execute_plan_requires_sqlite_338(monkeypatch):
+    c = SigmaCollection.from_dicts([detection(), correlation()])
+    plan = json.loads(sqliteBackend().convert(c, "zircolite"))[0]["correlation_plan"]
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 37, 2))
+    con = database([])
+    with pytest.raises(RuntimeError, match="3.38"):
+        execute_plan(con, plan)
+    con.close()
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+@pytest.mark.parametrize("seconds, starts", [(3, []), (5, [0]), (100, [0, 5])])
+def test_observation_end_decides_which_absence_windows_are_complete(
+    materialized, seconds, starts
+):
+    origin = datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+    rows = execute(
+        [detection(), correlation("temporal", condition="not a")],
+        [event(0, EventID=99), event(5, EventID=99)],
+        materialized=materialized,
+        observation_end=origin + seconds,
+    )
+    assert [row["window_start"] - origin for row in rows] == pytest.approx(starts)
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+def test_group_by_wider_than_one_json_object(materialized):
+    # json_object takes at most 63 pairs on SQLite 3.38.
+    fields = [f"F{i:02d}" for i in range(70)]
+    docs = [detection(), correlation(**{"group-by": fields})]
+    entry = json.loads(
+        sqliteBackend().convert(SigmaCollection.from_dicts(docs), "zircolite")
+    )[-1]
+    con = sqlite3.connect(":memory:")
+    con.execute(
+        "CREATE TABLE logs (timestamp TEXT, EventID INTEGER, "
+        + ", ".join(f"{field} TEXT" for field in fields)
+        + ")"
+    )
+    for t in (0, 1):
+        con.execute(
+            "INSERT INTO logs VALUES (?, 1, " + ", ".join("?" for _ in fields) + ")",
+            [event(t)["timestamp"], *(field.lower() for field in fields)],
+        )
+    if materialized:
+        keys = execute_plan(con, entry["correlation_plan"])[0][0]["group_keys"]
+    else:
+        keys = json.loads(con.execute(entry["rule"][0]).fetchone()[1])
+    con.close()
+    assert keys == {field: field.lower() for field in fields}
+
+
+def test_shared_child_correlation_is_compiled_once():
+    docs = [
+        detection(),
+        detection("b", 2),
+        detection("c", 3),
+        correlation(condition={"gte": 1}, name="k"),
+        correlation("temporal", ("k", "b"), name="c1"),
+        correlation("temporal", ("k", "c"), name="c2"),
+        correlation("temporal", ("c1", "c2"), name="p"),
+    ]
+    entry = json.loads(
+        sqliteBackend().convert(SigmaCollection.from_dicts(docs), "zircolite")
+    )[-1]
+    stages = entry["correlation_plan"]["prepare"]
+    assert sum(stage["name"].endswith("_alerts") for stage in stages) == 4
+    # SQLite 3.54 rejects the single statement of a chain this deep, so run the plan.
+    rows = execute(
+        docs, [event(0), event(1, EventID=2), event(2, EventID=3)], materialized=True
+    )
+    assert [(row["metric_value"], row["event_ids"]) for row in rows] == [
+        (2, ["0:1", "0:2", "0:3"])
+    ]
 
 
 @pytest.mark.parametrize("materialized", [False, True])
@@ -410,6 +457,61 @@ def test_generate_true_finalizes_referenced_detection():
     assert len(entries) == 2
     assert entries[0]["rule"] == ["SELECT * FROM logs WHERE EventID=1"]
     assert entries[1]["correlation"] is True
+
+
+@pytest.mark.parametrize("generate", [None, False, True])
+@pytest.mark.parametrize("output_format", ["default", "zircolite"])
+def test_chained_generate_controls_child_output(generate, output_format):
+    parent = correlation("event_count", ("burst",), {"gte": 1})
+    if generate is not None:
+        parent["correlation"]["generate"] = generate
+    output = sqliteBackend().convert(
+        SigmaCollection.from_dicts([detection(), correlation(name="burst"), parent]),
+        output_format,
+    )
+    entries = json.loads(output) if output_format == "zircolite" else output
+    assert len(entries) == (2 if generate else 1)
+    if output_format == "zircolite":
+        assert [entry["title"] for entry in entries] == (
+            ["burst", "corr"] if generate else ["corr"]
+        )
+    else:
+        assert all(query.startswith("WITH ") for query in entries)
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_overlapping_chained_branches_merge_sorted_evidence(materialized, grouped):
+    parent = correlation(
+        "temporal",
+        ("burst", "success"),
+        "burst or (burst and success) or success",
+        **{"group-by": ["Host"] if grouped else []},
+    )
+    docs = [detection(), detection("success", 2), correlation(name="burst"), parent]
+    events = [
+        event(0),
+        event(1),
+        event(2),
+        event(2, EventID=2),
+        event(20, Host="other"),
+        event(21, Host="other"),
+        event(22, Host="other"),
+        event(22, Host="other", EventID=2),
+    ]
+    rows = execute(docs, events, materialized=materialized)
+    assert len(rows) == 4
+    for row, ids, host in zip(
+        (rows[1], rows[3]),
+        (["0:1", "0:2", "0:3", "0:4"], ["0:5", "0:6", "0:7", "0:8"]),
+        ("h", "other"),
+    ):
+        assert row["group_keys"] == ({"Host": host} if grouped else {})
+        assert row["event_ids"] == ids
+        assert row["event_count"] == 4
+        assert row["metric_value"] == 2
+        assert len(row["child_alert_ids"]) == 2
+        assert row["child_alert_ids"] == sorted(set(row["child_alert_ids"]))
 
 
 @pytest.mark.parametrize("field", ["Group", "1field", "x`y", "user.name"])
