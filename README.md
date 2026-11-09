@@ -17,9 +17,10 @@ Maintained by [wagga](https://github.com/wagga40/).
 pip install pysigma-backend-sqlite
 ```
 
-Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) 2.0.1 or
-newer. Correlation output needs SQLite 3.38 or newer. sigma-cli 3.1 still requires
-pySigma 1.x, so alongside it pip installs backend 2.0.0, which has no keyword search.
+Requires Python 3.11+ and [pySigma](https://github.com/SigmaHQ/pySigma) 2.0.3 or
+newer. Correlation output needs SQLite 3.38 or newer. Use sigma-cli 4.0 or newer:
+sigma-cli 3.x requires pySigma 1.x, so alongside it pip installs backend 2.0.0,
+which has no keyword search.
 
 ## Quick start
 
@@ -50,8 +51,8 @@ Processing pipelines map a logsource to concrete fields. With
 SELECT * FROM logs WHERE Channel='Microsoft-Windows-Sysmon/Operational' AND (EventID=1 AND Image LIKE '%\\whoami.exe' ESCAPE '\')
 ```
 
-The sysmon and windows pipelines still declare `pysigma<2`; install them with
-`pip install --no-deps pysigma-pipeline-sysmon pysigma-pipeline-windows`. With sigma-cli:
+Install the pipelines with `pip install pysigma-pipeline-sysmon pysigma-pipeline-windows`;
+releases 3.0 and newer support pySigma 2. With sigma-cli:
 
 ```shell
 sigma convert -t sqlite -f zircolite -p sysmon -p windows-logsources rules/
@@ -128,7 +129,8 @@ searchable text. See [keyword search](https://github.com/SigmaHQ/pySigma-backend
   `sigma.policy.profiles`) to `SigmaCollection.from_yaml()`; the patterns must then
   suit Python's `re`.
 - **CIDR.** SQLite has no network type. Prefix patterns match IPv6 addresses only
-  in the spellings pySigma expands to.
+  in the spellings pySigma expands to: RFC 5952 and the uncompressed form Sysmon
+  writes (`0:0:0:0:0:0:0:1`), not zero-padded groups.
 - **Case folding** (`NOCASE`, `LIKE`) is ASCII only.
 - **Timestamp parts** use `strftime()` and need ISO-8601 text; a numeric epoch is
   read as a Julian day. `%W` can return week 0.

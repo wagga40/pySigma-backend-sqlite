@@ -79,8 +79,9 @@ jobs:
           python-version: '3.14'
       - run: pip install .
       # These pipeline releases still declare pysigma<2 but work unchanged on pySigma 2.
-      # pysigma-pipeline-windows 2.0.1 rejects 10 registry rules under windows-audit
-      # (fields without a Security 4657 equivalent), so the audit pins 2.0.0.
+      # pysigma-pipeline-windows 2.0.1 and newer (3.x included) reject 10 registry rules
+      # under windows-audit (fields without a Security 4657 equivalent), so the audit
+      # pins 2.0.0.
       - run: pip install --no-deps pysigma-pipeline-sysmon==2.0.0 pysigma-pipeline-windows==2.0.0
       - run: python tools/audit_corpus.py .corpus --profile ${{ matrix.profile }} --fulltext-field _sigma_fulltext --output corpus-${{ matrix.profile }}.json
       - uses: actions/upload-artifact@v4

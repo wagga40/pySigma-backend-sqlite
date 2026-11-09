@@ -268,6 +268,39 @@ def test_sqlite_cidr_ipv6_prefix_ending_in_zero_groups(sqlite_backend: sqliteBac
     }
 
 
+def test_sqlite_cidr_ipv6_matches_uncompressed_spelling(sqlite_backend: sqliteBackend):
+    # Sysmon writes IPv6 uncompressed (0:0:0:0:0:0:0:1 for ::1); since pySigma 2.0.3
+    # a filter excludes both spellings instead of letting the uncompressed one through.
+    query = sqlite_backend.convert(
+        SigmaCollection.from_yaml(
+            """
+            title: Test
+            status: test
+            logsource:
+                category: test_category
+                product: test_product
+            detection:
+                sel:
+                    Initiated: 'true'
+                filter:
+                    DestinationIp|cidr: '::1/128'
+                condition: sel and not filter
+        """
+        )
+    )[0]
+    assert query == (
+        "SELECT * FROM logs WHERE Initiated='true' AND (NOT COALESCE(("
+        "DestinationIp='::1' OR DestinationIp='0:0:0:0:0:0:0:1'), 0))"
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE logs (Initiated TEXT, DestinationIp TEXT)")
+    connection.executemany(
+        "INSERT INTO logs VALUES ('true', ?)",
+        [("::1",), ("0:0:0:0:0:0:0:1",), ("0:0:0:0:0:0:0:2",), (None,)],
+    )
+    assert {row[1] for row in connection.execute(query)} == {"0:0:0:0:0:0:0:2", None}
+
+
 def test_sqlite_cidr_expanding_to_several_patterns_stays_grouped(
     sqlite_backend: sqliteBackend,
 ):

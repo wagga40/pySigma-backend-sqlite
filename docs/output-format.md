@@ -9,7 +9,7 @@ The `zircolite` format is a JSON list with one entry per converted rule.
 
 | Key | Content |
 |---|---|
-| `title`, `id`, `status`, `description`, `author`, `tags`, `falsepositives`, `level` | Copied from the rule |
+| `title`, `id`, `status`, `description`, `author`, `tags`, `falsepositives`, `level` | Copied from the rule; pySigma strips control characters, line breaks included |
 | `rule` | List of standalone `SELECT` statements |
 | `channel`, `eventid` | Values the condition requires; an empty list means "unrestricted", not "inapplicable" |
 | `required_fields` | Columns the SQL reads |
