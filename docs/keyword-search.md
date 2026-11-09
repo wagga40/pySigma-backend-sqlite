@@ -77,6 +77,6 @@ poetry run python tools/audit_corpus.py /path/to/sigma \
 
 `windows-sysmon` needs `pysigma-pipeline-sysmon` and `pysigma-pipeline-windows`;
 `windows-audit` needs `pysigma-pipeline-windows`. The counts are for the 2.0.0
-releases of both: `pysigma-pipeline-windows` 2.0.1 rejects 10 registry rules under
-`windows-audit`. The auditor provisions an empty TEXT column to prepare the SQL, so
-these numbers measure conversion coverage, not detection accuracy.
+releases of both: `pysigma-pipeline-windows` 2.0.1 and newer reject 10 registry
+rules under `windows-audit`. The auditor provisions an empty TEXT column to prepare
+the SQL, so these numbers measure conversion coverage, not detection accuracy.

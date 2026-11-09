@@ -39,7 +39,8 @@ output before giving it 2.x rulesets.
 
 ## From 2.0 to 2.1
 
-- Requires Python 3.11+ and pySigma 2; backend 2.1.1 needs pySigma 2.0.1 or newer.
+- Requires Python 3.11+ and pySigma 2; backend 2.1.1 needs pySigma 2.0.1 or newer,
+  2.1.2 needs 2.0.3.
 - Keyword rules convert when `fulltext_field` is set; their entries use
   `schema_version: 3` ([keyword search](keyword-search.md)). Other output keeps
   version 2. Without it they still raise `SigmaFeatureNotSupportedByBackendError`,
@@ -50,3 +51,13 @@ output before giving it 2.x rulesets.
   parenthesized; before, it could match events failing the rest of the AND.
 - A `value_count` over a list of fields raises
   `SigmaFeatureNotSupportedByBackendError` instead of a `TypeError`.
+
+## From 2.1.1 to 2.1.2
+
+pySigma 2.0.3 changes the output of 2.1.2:
+
+- IPv6 CIDR values also match the uncompressed form Sysmon writes, such as
+  `0:0:0:0:0:0:0:1` for `::1`; a filter like `not DestinationIp|cidr: ::1/128` no
+  longer lets that spelling through. All 20 SigmaHQ rules with IPv6 CIDR values change.
+- Rule metadata loses control characters, line breaks included, so a multi-line
+  `description` becomes one line with nothing where each break was.
